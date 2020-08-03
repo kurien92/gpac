@@ -3942,6 +3942,10 @@ GF_Err metx_box_dump(GF_Box *a, FILE * trace)
 	case GF_ISOM_BOX_TYPE_METT:
 		name = "TextMetaDataSampleEntryBox";
 		break;
+	case GF_ISOM_BOX_TYPE_AMF0:
+		name = "TextMetaDataAMFeEntryBox";
+		break;
+
 	case GF_ISOM_BOX_TYPE_SBTT:
 		name = "SubtitleSampleEntryBox";
 		break;

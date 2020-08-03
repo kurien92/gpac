@@ -212,6 +212,7 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 		if (ctx->decinfo == DECINFO_AUTO)
 			ctx->decinfo = DECINFO_FIRST;
 		break;
+	case GF_CODECID_META_TEXT_AMF:
 	case GF_CODECID_META_TEXT:
 		if (!gf_filter_pid_get_property(pid, GF_PROP_PID_MIME))
 			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_MIME, &PROP_STRING(mimetype) );

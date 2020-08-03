@@ -109,6 +109,7 @@ CodecIDReg CodecRegistry [] = {
 	{GF_CODECID_DIMS, 0, GF_STREAM_PRIVATE_SCENE, "3GPP DIMS Scene", "dims", NULL, "application/3gpp-dims"},
 	{GF_CODECID_WEBVTT, 0, GF_STREAM_TEXT, "WebVTT Text", "vtt", "wvtt", "text/webtvv"},
 	{GF_CODECID_SIMPLE_TEXT, 0, GF_STREAM_TEXT, "Simple Text Stream", "txt", "stxt", "text/subtitle"},
+	{GF_CODECID_META_TEXT_AMF, 0, GF_STREAM_METADATA, "Metadata Action Stream", "mtxt", "amf0", "application/text"},
 	{GF_CODECID_META_TEXT, 0, GF_STREAM_METADATA, "Metadata Text Stream", "mtxt", "mett", "application/text"},
 	{GF_CODECID_META_XML, 0, GF_STREAM_METADATA, "Metadata XML Stream", "mxml", "metx", "application/text+xml"},
 	{GF_CODECID_SUBS_TEXT, 0, GF_STREAM_TEXT, "Subtitle text Stream", "subs", "sbtt", "text/text"},
@@ -210,6 +211,8 @@ GF_CodecID gf_codec_id_from_isobmf(u32 isobmftype)
 		return GF_CODECID_SIMPLE_TEXT;
 	case GF_ISOM_SUBTYPE_METT:
 		return GF_CODECID_META_TEXT;
+	case GF_ISOM_SUBTYPE_AMF0:
+		return GF_CODECID_META_TEXT_AMF;
 	case GF_ISOM_SUBTYPE_METX:
 		return GF_CODECID_META_XML;
 	case GF_ISOM_SUBTYPE_SBTT:

@@ -264,6 +264,7 @@ enum
 	GF_ISOM_SUBTYPE_STPP		= GF_4CC( 's', 't', 'p', 'p' ),
 	GF_ISOM_SUBTYPE_SBTT		= GF_4CC( 's', 'b', 't', 't' ),
 	GF_ISOM_SUBTYPE_METT		= GF_4CC( 'm', 'e', 't', 't' ),
+	GF_ISOM_SUBTYPE_AMF0		= GF_4CC( 'a', 'm', 'f', '0' ),
 	GF_ISOM_SUBTYPE_METX		= GF_4CC( 'm', 'e', 't', 'x' ),
 	GF_ISOM_SUBTYPE_TX3G		= GF_4CC( 't', 'x', '3', 'g' ),
 	GF_ISOM_SUBTYPE_TEXT		= GF_4CC( 't', 'e', 'x', 't' ),

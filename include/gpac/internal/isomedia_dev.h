@@ -267,6 +267,7 @@ enum
 
 	GF_ISOM_BOX_TYPE_METX	= GF_4CC( 'm', 'e', 't', 'x' ),
 	GF_ISOM_BOX_TYPE_METT	= GF_4CC( 'm', 'e', 't', 't' ),
+	GF_ISOM_BOX_TYPE_AMF0	= GF_4CC( 'a', 'm', 'f', '0' ),
 
 	/* ISMA 1.0 Encryption and Authentication V 1.0 */
 	GF_ISOM_BOX_TYPE_IKMS	= GF_4CC( 'i', 'K', 'M', 'S' ),

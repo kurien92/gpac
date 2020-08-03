@@ -2086,7 +2086,15 @@ sample_entry_setup:
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MP4Mux] Error creating new METT sample description: %s\n", gf_error_to_string(e) ));
 			return e;
 		}
-	} else if (m_subtype == GF_ISOM_SUBTYPE_STPP) {
+	} else if (m_subtype == GF_ISOM_SUBTYPE_AMF0) {
+		comp_name = "Action Message Metadata";
+		e = gf_isom_new_stxt_description(ctx->file, tkw->track_num, GF_ISOM_SUBTYPE_AMF0, meta_mime, meta_encoding, meta_config, &tkw->stsd_idx);
+		if (e) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MP4Mux] Error creating new AMF0 sample description: %s\n", gf_error_to_string(e) ));
+			return e;
+		}
+	} 
+	else if (m_subtype == GF_ISOM_SUBTYPE_STPP) {
 		if (meta_xmlns && !strcmp(meta_xmlns, "http://www.w3.org/ns/ttml")) comp_name = "TTML";
 		else comp_name = "XML Subtitle";
 		e = gf_isom_new_xml_subtitle_description(ctx->file, tkw->track_num, meta_xmlns, meta_schemaloc, meta_auxmimes, &tkw->stsd_idx);

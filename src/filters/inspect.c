@@ -1944,6 +1944,7 @@ props_done:
 			break;
 		case GF_CODECID_SUBS_TEXT:
 		case GF_CODECID_META_TEXT:
+		case GF_CODECID_META_TEXT_AMF:
 			gf_fprintf(dump, "<![CDATA[");
 			for (i=0; i<size; i++) {
 				gf_fputc(data[i], dump);

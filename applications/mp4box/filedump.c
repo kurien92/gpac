@@ -2771,7 +2771,7 @@ void DumpTrackInfo(GF_ISOFile *file, GF_ISOTrackID trackID, Bool full_dump, Bool
 		fprintf(stderr, "\n Size %d x %d - Translation X=%d Y=%d - Layer %d\n", w, h, tx, ty, l);
 	} else if (mtype == GF_ISOM_MEDIA_META) {
 		const char *content_encoding = NULL;
-		if (msub_type == GF_ISOM_SUBTYPE_METT) {
+		if (msub_type == GF_ISOM_SUBTYPE_METT || msub_type == GF_ISOM_SUBTYPE_AMF0) {
 			const char *mime = NULL;
 			const char *config  = NULL;
 			gf_isom_stxt_get_description(file, trackNum, 1, &mime, &content_encoding, &config);

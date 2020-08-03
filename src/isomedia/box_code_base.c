@@ -6356,6 +6356,7 @@ static void gf_isom_check_sample_desc(GF_TrackBox *trak)
 		case GF_ISOM_BOX_TYPE_RTCP_STSD:
 		case GF_ISOM_BOX_TYPE_METX:
 		case GF_ISOM_BOX_TYPE_METT:
+		case GF_ISOM_BOX_TYPE_AMF0:
 		case GF_ISOM_BOX_TYPE_STXT:
 		case GF_ISOM_BOX_TYPE_AVC1:
 		case GF_ISOM_BOX_TYPE_AVC2:
