@@ -1505,7 +1505,7 @@ static void dashdmx_declare_properties(GF_DASHDmxCtx *ctx, GF_DASHGroup *group, 
 			|| strstr(qinfo.codec, "srt")
 			|| strstr(qinfo.codec, "text")
 			|| strstr(qinfo.codec, "tx3g")
-			|| strstr(qinfo.codec, "stxt")
+			|| strstr(qinfo.codec, "amf0")
 			|| strstr(qinfo.codec, "stpp")
 		) {
 			stream_type = GF_STREAM_TEXT;

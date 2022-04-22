@@ -110,7 +110,7 @@ CodecIDReg CodecRegistry [] = {
 	{GF_CODECID_SVG_GZ, 0, GF_STREAM_PRIVATE_SCENE, "SVG+gz over RTP", "svgzr", NULL, "application/x-svgz-rtp"},
 	{GF_CODECID_DIMS, 0, GF_STREAM_PRIVATE_SCENE, "3GPP DIMS Scene", "dims", NULL, "application/3gpp-dims"},
 	{GF_CODECID_WEBVTT, 0, GF_STREAM_TEXT, "WebVTT Text", "vtt", "wvtt", "text/webtvv"},
-	{GF_CODECID_SIMPLE_TEXT, 0, GF_STREAM_TEXT, "Simple Text Stream", "txt", "stxt", "text/subtitle"},
+	{GF_CODECID_SIMPLE_TEXT, 0, GF_STREAM_METADATA, "Metadata Action Stream", "mtxt", "amf0", "application/text"},
 	{GF_CODECID_META_TEXT_AMF, 0, GF_STREAM_METADATA, "Metadata Action Stream", "mtxt", "amf0", "application/text"},
 	{GF_CODECID_META_TEXT_AMF3, 0, GF_STREAM_METADATA, "Metadata Action Stream", "mtxt", "amf3", "application/text"},
 	{GF_CODECID_META_TEXT, 0, GF_STREAM_METADATA, "Metadata Text Stream", "mtxt", "mett", "application/text"},
