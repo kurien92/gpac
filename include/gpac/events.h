@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Events management
@@ -151,7 +151,7 @@ typedef struct
 
 	Bool disable_vsync;
 
-	// resources must be resetup before next render step (this is mainly due to discard all openGL textures and cached objects) - inly used when sent from plugin to term
+	// resources must be resetup before next render step (this is mainly due to discard all OpenGL textures and cached objects) - inly used when sent from plugin to term
 	Bool hw_reset;
 } GF_EventVideoSetup;
 
@@ -304,7 +304,7 @@ typedef struct
 	u8 type;
 	/*the URL the auth request is for*/
 	const char *site_url;
-	/*user name (provided buffer can hold 50 bytes). It may already be formated, or an empty ("") string*/
+	/*user name (provided buffer can hold 50 bytes). It may already be formatted, or an empty ("") string*/
 	char *user;
 	/*password (provided buffer can hold 50 bytes)*/
 	char *password;

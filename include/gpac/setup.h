@@ -180,7 +180,7 @@ typedef unsigned int size_t;
 /*! default path separator of the current platform*/
 #define GF_PATH_SEPARATOR	'\\'
 
-/*we must explicitely export our functions...*/
+/*we must explicitly export our functions...*/
 
 /*! macro for cross-platform signaling of exported function of libgpac*/
 #define GF_EXPORT EXPORT_C
@@ -432,12 +432,21 @@ typedef struct {
 
 #if (defined (WIN32) || defined (_WIN32_WCE)) && (defined(__MINGW32__) || !defined(__GNUC__))
 
-/*! macro for cross-platform suffix used for formating s64 integers in logs and printf routines*/
+#if defined(__MINGW32__)
+/*! macro for cross-platform suffix used for formatting s64 integers in logs and printf routines*/
+#define LLD_SUF "lld"
+/*! macro for cross-platform suffix used for formatting u64 integers in logs and printf routines*/
+#define LLU_SUF "llu"
+/*! macro for cross-platform suffix used for formatting u64 integers as hex in logs and printf routines*/
+#define LLX_SUF "llx"
+#else
+/*! macro for cross-platform suffix used for formatting s64 integers in logs and printf routines*/
 #define LLD_SUF "I64d"
-/*! macro for cross-platform suffix used for formating u64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers in logs and printf routines*/
 #define LLU_SUF "I64u"
-/*! macro for cross-platform suffix used for formating u64 integers as hex in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers as hex in logs and printf routines*/
 #define LLX_SUF "I64x"
+#endif
 
 #ifdef _WIN64
 /*! macro for cross-platform casting a pointer to an integer*/
@@ -449,11 +458,11 @@ typedef struct {
 
 #elif defined (__SYMBIAN32__)
 
-/*! macro for cross-platform suffix used for formating s64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting s64 integers in logs and printf routines*/
 #define LLD_SUF "d"
-/*! macro for cross-platform suffix used for formating u64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers in logs and printf routines*/
 #define LLU_SUF "u"
-/*! macro for cross-platform suffix used for formating u64 integers as hex in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers as hex in logs and printf routines*/
 #define LLX_SUF "x"
 
 /*! macro for cross-platform casting a pointer to an integer*/
@@ -462,11 +471,11 @@ typedef struct {
 /*seems that even though _LP64 is defined in OSX, %ll modifiers are still needed*/
 #elif defined(__DARWIN__) || defined(__APPLE__)
 
-/*! macro for cross-platform suffix used for formating s64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting s64 integers in logs and printf routines*/
 #define LLD_SUF "lld"
-/*! macro for cross-platform suffix used for formating u64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers in logs and printf routines*/
 #define LLU_SUF "llu"
-/*! macro for cross-platform suffix used for formating u64 integers as hex in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers as hex in logs and printf routines*/
 #define LLX_SUF "llx"
 
 #ifdef __LP64__ /* Mac OS 64 bits */
@@ -479,11 +488,11 @@ typedef struct {
 
 #elif defined(_LP64) /*Unix 64 bits*/
 
-/*! macro for cross-platform suffix used for formating s64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting s64 integers in logs and printf routines*/
 #define LLD_SUF "ld"
-/*! macro for cross-platform suffix used for formating u64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers in logs and printf routines*/
 #define LLU_SUF "lu"
-/*! macro for cross-platform suffix used for formating u64 integers as hex in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers as hex in logs and printf routines*/
 #define LLX_SUF "lx"
 
 /*! macro for cross-platform casting a pointer to an integer*/
@@ -491,11 +500,11 @@ typedef struct {
 
 #else /*Unix 32 bits*/
 
-/*! macro for cross-platform suffix used for formating s64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting s64 integers in logs and printf routines*/
 #define LLD_SUF "lld"
-/*! macro for cross-platform suffix used for formating u64 integers in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers in logs and printf routines*/
 #define LLU_SUF "llu"
-/*! macro for cross-platform suffix used for formating u64 integers as hex in logs and printf routines*/
+/*! macro for cross-platform suffix used for formatting u64 integers as hex in logs and printf routines*/
 #define LLX_SUF "llx"
 
 /*! macro for cross-platform casting a pointer to an integer*/
@@ -654,7 +663,7 @@ typedef struct {
 \brief Memory management
 
 GPAC can use its own memory tracker, depending on compilation option. It is recommended to use only the functions
-defined in this section to allocate and free memory whenever developping within the GPAC library.
+defined in this section to allocate and free memory whenever developing within the GPAC library.
 
 \warning these functions shall only be used after initializing the library using \ref gf_sys_init
 @{
@@ -691,14 +700,14 @@ void gf_free(void *ptr);
 
 /*! allocates memory, shall be freed using \ref gf_free
 \param size same as malloc()
-\return adress of allocated block
+\return address of allocated block
 */
 void* gf_malloc(size_t size);
 
 /*! allocates memory array, shall be freed using \ref gf_free
 \param num same as calloc()
 \param size_of same as calloc()
-\return adress of allocated block
+\return address of allocated block
 */
 void* gf_calloc(size_t num, size_t size_of);
 
@@ -711,7 +720,7 @@ char* gf_strdup(const char *str);
 /*! reallocates memory, shall be freed using \ref gf_free
 \param ptr same as realloc()
 \param size same as realloc()
-\return adress of reallocated block
+\return address of reallocated block
 */
 void* gf_realloc(void *ptr, size_t size);
 
@@ -721,6 +730,13 @@ void* gf_realloc(void *ptr, size_t size);
 
 /*end GPAC memory tracking*/
 
+/*! copy source string to destination, ensuring 0-terminated string result
+\param dst  destination buffer
+\param src  source buffer
+\param dsize size of destination buffer
+\return same as strlcpy
+*/
+size_t gf_strlcpy(char *dst, const char *src, size_t dsize);
 
 #ifdef __cplusplus
 }

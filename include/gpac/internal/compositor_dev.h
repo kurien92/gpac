@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2018
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Rendering sub-project
@@ -150,6 +150,12 @@ typedef struct
 
 #define DOUBLECLICK_TIME_MS		250
 
+enum
+{
+	TILE_DEBUG_NONE=0,
+	TILE_DEBUG_PARTIAL,
+	TILE_DEBUG_FULL
+};
 
 enum
 {
@@ -205,6 +211,9 @@ struct __tag_compositor
 	u32 drv;
 	GF_Err last_error;
 
+	//filter mode, we can be a source for our built-in URLs
+	char *src;
+
 	/*audio renderer*/
 	struct _audio_render *audio_renderer;
 	/*video out*/
@@ -242,7 +251,7 @@ struct __tag_compositor
 	GF_List *textures;
 	Bool texture_inserted;
 
-	/*all textures to be destroyed (needed for openGL context ...)*/
+	/*all textures to be destroyed (needed for OpenGL context ...)*/
 	GF_List *textures_gc;
 
 	/*event queue*/
@@ -270,6 +279,8 @@ struct __tag_compositor
 	Bool bench_mode;
 	//0: no frame pending, 1: frame pending, needs clock increase, 2: frames are pending but one frame has been decoded, do not increase clock
 	u32 force_bench_frame;
+	//number of audio frames sent in call to send_frame
+	u32 audio_frames_sent;
 
 	u32 frame_time[GF_SR_FPS_COMPUTE_SIZE];
 	u32 frame_dur[GF_SR_FPS_COMPUTE_SIZE];
@@ -290,9 +301,12 @@ struct __tag_compositor
 	Bool amc, async;
 	u32 asr, ach, alayout, afmt, asize, avol, apan, abuf;
 	Double max_aspeed, max_vspeed;
-	u32 buf, rbuf, mbuf, ntpsync;
+	u32 buffer, rbuffer, mbuffer, ntpsync;
 	
 	u32 ogl, mode2d;
+
+	s32 subtx, subty, subd, audd;
+	u32 subfs;
 
 	/*display size*/
 	u32 display_width, display_height;
@@ -358,6 +372,8 @@ struct __tag_compositor
 	/*count number of initialized sensors*/
 	u32 interaction_sensors;
 
+	//in player mode, exit if set
+	//in non player mode, check for eos
 	u32 check_eos_state;
 	u32 last_check_pass;
 
@@ -427,7 +443,7 @@ struct __tag_compositor
 
 	/*to copy!*/
 	u32 nbviews, stereo, camlay;
-	Bool rview;
+	Bool rview, dbgpack;
 	Fixed dispdist;
 	char *mvshader;
 
@@ -582,7 +598,7 @@ struct __tag_compositor
 	If not set video is written through glDrawPixels with bitmap (slow scaling), or converted to
 	po2 texture*/
 	Bool epow2;
-	/*use openGL for outline rather than vectorial ones*/
+	/*use OpenGL for outline rather than vectorial ones*/
 	Bool linegl;
 	/*disable RECT extensions (except for Bitmap...)*/
 	Bool rext;
@@ -643,8 +659,8 @@ struct __tag_compositor
 	u8 *screen_buffer, *line_buffer;
 	u32 screen_buffer_alloc_size;
 
-	u32 tvtn, tvtt;
-	Bool tvtd, tvtf;
+	u32 tvtn, tvtt, tvtd;
+	Bool tvtf;
 	u32 vrhud_mode;
 	Fixed fov;
 
@@ -1124,7 +1140,7 @@ struct _traversing_state
 
 	/*layer traversal state:
 		set to the first traversed layer3D when picking
-		set to the current layer3D traversed when rendering 3D to an offscreen bitmap. This alows other
+		set to the current layer3D traversed when rendering 3D to an offscreen bitmap. This allows other
 			nodes (typically bindables) seting the layer dirty flags to force a redraw
 	*/
 	GF_Node *layer3d;
@@ -1176,6 +1192,7 @@ typedef struct _audiointerface
 	Bool forced_layout;
 	//updated at each frame, used if frame fetch returns NULL
 	Bool is_buffering;
+	Bool is_eos;
 } GF_AudioInterface;
 
 typedef struct __audiomix GF_AudioMixer;
@@ -1198,14 +1215,15 @@ Bool gf_mixer_reconfig(GF_AudioMixer *am);
 /*retrieves mixer cfg*/
 void gf_mixer_get_config(GF_AudioMixer *am, u32 *outSR, u32 *outCH, u32 *outFMT, u64 *outChCfg);
 /*called by audio renderer in case the hardware used a different setup than requested*/
-void gf_mixer_set_config(GF_AudioMixer *am, u32 outSR, u32 outCH, u32 outFMT, u64 ch_cfg);
+GF_Err gf_mixer_set_config(GF_AudioMixer *am, u32 outSR, u32 outCH, u32 outFMT, u64 ch_cfg);
 Bool gf_mixer_is_src_present(GF_AudioMixer *am, GF_AudioInterface *ifce);
 u32 gf_mixer_get_src_count(GF_AudioMixer *am);
-void gf_mixer_force_chanel_out(GF_AudioMixer *am, u32 num_channels);
+GF_Err gf_mixer_force_channel_out(GF_AudioMixer *am, u32 num_channels);
 u32 gf_mixer_get_block_align(GF_AudioMixer *am);
 Bool gf_mixer_must_reconfig(GF_AudioMixer *am);
 Bool gf_mixer_empty(GF_AudioMixer *am);
 Bool gf_mixer_buffering(GF_AudioMixer *am);
+Bool gf_mixer_is_eos(GF_AudioMixer *am);
 
 //#define ENABLE_AOUT
 
@@ -1245,8 +1263,8 @@ typedef struct _audio_render
 
 	u32 audio_delay, volume, pan, mute;
 
-	//set when output is not realtime
-	Bool non_rt_output;
+	//set when output is not realtime - set to 2 will indicate end of session
+	u32 non_rt_output;
 
 	Fixed yaw, pitch, roll;
 
@@ -1309,6 +1327,7 @@ typedef struct
 	Bool need_release;
 	u32 is_open;
 	Bool is_muted;
+	Bool is_playing;
 	Bool register_with_renderer, register_with_parent;
 
 	GF_SoundInterface *snd;
@@ -1495,7 +1514,9 @@ enum
 	/*span is in the current text selection*/
 	GF_TEXT_SPAN_RIGHT_TO_LEFT = 1<<3,
 	/*span is in the current text selection*/
-	GF_TEXT_SPAN_SELECTED = 1<<4
+	GF_TEXT_SPAN_SELECTED = 1<<4,
+	/*span is strikeout*/
+	GF_TEXT_SPAN_STRIKEOUT = 1<<5
 };
 
 typedef struct __text_span
@@ -1586,7 +1607,14 @@ typedef struct
 
 GF_Err gf_sc_set_scene_size(GF_Compositor *compositor, u32 Width, u32 Height, Bool force_size);
 
-void gf_sc_sys_frame_pending(GF_Compositor *compositor, Double ts_offset, u32 obj_time, GF_Filter *from_filter);
+void gf_sc_sys_frame_pending(GF_Compositor *compositor, u32 cts, u32 obj_time, GF_Filter *from_filter);
+Bool gf_sc_check_sys_frame(GF_Scene *scene, GF_ObjectManager *odm, GF_FilterPid *for_pid, GF_Filter *from_filter, u32 cts);
+
+/*
+get diff in ms (independent of clock absolute speed value, only speed sign) between a clock value and a timestamp in ms
+return value is positive if timestamp is ahead (in the future of the clock timeline) of clock, negative if in the past (late)
+*/
+s32 gf_clock_diff(GF_Clock *ck, u32 ck_time, u32 cts);
 
 Bool gf_sc_is_over(GF_Compositor *compositor, GF_SceneGraph *scene_graph);
 
@@ -1633,7 +1661,7 @@ GF_SceneNamespace *gf_scene_ns_new(GF_Scene *scene, GF_ObjectManager *owner, con
 /*destroy service*/
 void gf_scene_ns_del(GF_SceneNamespace *ns, GF_Scene *scene);
 
-void gf_scene_ns_connect_object(GF_Scene *scene, GF_ObjectManager *odm, char *serviceURL, char *parent_url);
+void gf_scene_ns_connect_object(GF_Scene *scene, GF_ObjectManager *odm, char *serviceURL, char *parent_url, GF_SceneNamespace *parent_ns);
 
 
 
@@ -1656,7 +1684,7 @@ struct _gf_scene
 	both external resources (urls) and ODs sent in MPEG-4 systems*/
 	GF_List *resources;
 
-	/*list of GF_MediaObject - these are the links betwwen scene nodes (URL, xlink:href) and media resources.
+	/*list of GF_MediaObject - these are the links between scene nodes (URL, xlink:href) and media resources.
 	We need this link because of MPEG-4 Systems, where an OD (media resource) can be removed or replaced by the server
 	without the scene being modified*/
 	GF_List *scene_objects;
@@ -1715,7 +1743,7 @@ struct _gf_scene
 	u32 selected_service_id;
 
 	/*URLs of current video, audio and subs (we can't store objects since they may be destroyed when seeking)*/
-	SFURL visual_url, audio_url, text_url, dims_url;
+	SFURL visual_url, audio_url, text_url, dims_url, subs_url;
 
 	Bool is_tiled_srd;
 	u32 srd_type;
@@ -1755,7 +1783,8 @@ struct _gf_scene
 	GF_List *declared_addons;
 	//set when content is replaced by an addon (DASH PVR mode)
 	Bool main_addon_selected;
-	u32 sys_clock_at_main_activation, obj_clock_at_main_activation;
+	u32 sys_clock_at_main_activation;
+	u64 obj_clock_at_main_activation;
 
 	//0: no pause - 1: paused and trigger pause command to net, 2: only clocks are paused but commands not sent
 	u32 first_frame_pause_type;
@@ -1780,10 +1809,10 @@ Bool gf_scene_is_root(GF_Scene *scene);
 
 void gf_scene_remove_object(GF_Scene *scene, GF_ObjectManager *odm, u32 for_shutdown);
 /*browse all (media) channels and send buffering info to the app*/
-void gf_scene_buffering_info(GF_Scene *scene);
+void gf_scene_buffering_info(GF_Scene *scene, Bool rebuffer_done);
 void gf_scene_attach_to_compositor(GF_Scene *scene);
 struct _mediaobj *gf_scene_get_media_object(GF_Scene *scene, MFURL *url, u32 obj_type_hint, Bool lock_timelines);
-struct _mediaobj *gf_scene_get_media_object_ex(GF_Scene *scene, MFURL *url, u32 obj_type_hint, Bool lock_timelines, struct _mediaobj *sync_ref, Bool force_new_if_not_attached, GF_Node *node_ptr);
+struct _mediaobj *gf_scene_get_media_object_ex(GF_Scene *scene, MFURL *url, u32 obj_type_hint, Bool lock_timelines, struct _mediaobj *sync_ref, Bool force_new_if_not_attached, GF_Node *node_ptr, GF_Scene *original_parent_scene);
 void gf_scene_setup_object(GF_Scene *scene, GF_ObjectManager *odm);
 /*updates scene duration based on sub objects*/
 void gf_scene_set_duration(GF_Scene *scene);
@@ -1817,7 +1846,7 @@ void gf_scene_force_size_to_video(GF_Scene *scene, GF_MediaObject *mo);
 //If @check_buffering is 1, returns 1 if no clock is buffering, 0 otheriwse
 Bool gf_scene_check_clocks(GF_SceneNamespace *ns, GF_Scene *scene, Bool check_buffering);
 
-void gf_scene_notify_event(GF_Scene *scene, u32 event_type, GF_Node *n, void *dom_evt, GF_Err code, Bool no_queueing);
+void gf_scene_notify_event(GF_Scene *scene, u32 event_type, GF_Node *n, void *dom_evt, GF_Err code, Bool no_queuing);
 
 void gf_scene_mpeg4_inline_restart(GF_Scene *scene);
 void gf_scene_mpeg4_inline_check_restart(GF_Scene *scene);
@@ -1825,7 +1854,7 @@ void gf_scene_mpeg4_inline_check_restart(GF_Scene *scene);
 
 GF_Node *gf_scene_get_subscene_root(GF_Node *inline_node);
 
-void gf_scene_select_main_addon(GF_Scene *scene, GF_ObjectManager *odm, Bool set_on, u32 current_clock_time);
+void gf_scene_select_main_addon(GF_Scene *scene, GF_ObjectManager *odm, Bool set_on, u64 absolute_clock_time);
 void gf_scene_reset_addons(GF_Scene *scene);
 void gf_scene_reset_addon(GF_AddonMedia *addon, Bool disconnect);
 
@@ -1852,64 +1881,44 @@ void gf_inline_restart(GF_Scene *scene);
 Bool gf_mo_is_same_url(GF_MediaObject *obj, MFURL *an_url, Bool *keep_fragment, u32 obj_hint_type);
 
 void gf_mo_update_caps(GF_MediaObject *mo);
+void gf_mo_update_caps_ex(GF_MediaObject *mo, Bool check_unchanged);
 
 
 const char *gf_scene_get_fragment_uri(GF_Node *node);
 void gf_scene_set_fragment_uri(GF_Node *node, const char *uri);
 
 
-#if FILTER_FIXME
-
-
-/*URI relocators are used for containers like zip or ISO FF with file items. The relocator
-is in charge of translating the URI, potentially extracting the associated resource and sending
-back the new (local or not) URI. Only the interface is defined, URI translators are free to derive from them
-
-relocate a URI - if NULL is returned, this relocator is not concerned with the URI
-otherwise returns the translated URI
-*/
-
-#define GF_TERM_URI_RELOCATOR	\
-	Bool (*relocate_uri)(void *__self, const char *parent_uri, const char *uri, char *out_relocated_uri, char *out_localized_uri);		\
-
-typedef struct __gf_uri_relocator GF_URIRelocator;
-
-struct __gf_uri_relocator
+/*GF_NET_ASSOCIATED_CONTENT_TIMING*/
+typedef struct
 {
-	GF_TERM_URI_RELOCATOR
-};
+	u32 timeline_id;
+	u32 media_timescale;
+	u64 media_timestamp;
+	//for now only used in MPEG-2, so media_pts is in 90khz scale
+	u64 media_pts;
+	Bool force_reload;
+	Bool is_paused;
+	Bool is_discontinuity;
+	u64 ntp;
+} GF_AssociatedContentTiming;
 
 typedef struct
 {
-	GF_TERM_URI_RELOCATOR
-	GF_Terminal *term;
-	char *szAbsRelocatedPath;
-} GF_TermLocales;
-
-#define	MAX_SHORTCUTS	200
-
-typedef struct
-{
-	u8 code;
-	u8 mods;
-	u8 action;
-} GF_Shortcut;
-
-typedef struct
-{
-	void *udta;
-	/*called when an event should be filtered
-	*/
-	Bool (*on_event)(void *udta, GF_Event *evt, Bool consumed_by_compositor);
-} GF_TermEventFilter;
-
-GF_Err gf_term_add_event_filter(GF_Terminal *terminal, GF_TermEventFilter *ef);
-GF_Err gf_term_remove_event_filter(GF_Terminal *terminal, GF_TermEventFilter *ef);
+	//negative values mean "timeline is ready no need for timing message"
+	s32 timeline_id;
+	const char *external_URL;
+	Bool is_announce, is_splicing;
+	Bool reload_external;
+	Bool enable_if_defined;
+	Bool disable_if_defined;
+	GF_Fraction activation_countdown;
+	//start and end times of splicing if any
+	Double splice_start_time, splice_end_time;
+	Bool splice_time_pts;
+} GF_AssociatedContentLocation;
 
 void gf_scene_register_associated_media(GF_Scene *scene, GF_AssociatedContentLocation *addon_info);
 void gf_scene_notify_associated_media_timeline(GF_Scene *scene, GF_AssociatedContentTiming *addon_time);
-
-#endif
 
 
 /*clock*/
@@ -1922,6 +1931,9 @@ struct _object_clock
 	mediaControl and others that would break stream dependencies*/
 	Bool clock_init, has_seen_eos, no_time_ctrl;
 	u32 init_timestamp, start_time, pause_time, nb_paused;
+	//number of loops (x 0xFFFFFFFFUL) at init time, used to recompute absolute 64bit clock value if needed
+	u32 init_ts_loops;
+
 	/*the number of streams buffering on this clock*/
 	u32 nb_buffering;
 	/*associated media control if any*/
@@ -1935,11 +1947,14 @@ struct _object_clock
 	u32 last_ts_rendered;
 	u32 service_id;
 
-	//media time in ms corresponding to the init tmiestamp of the clock
-	u32 media_time_at_init;
+	//media time in ms
+	u64 media_time_orig;
+	//absolute media timestamp in ms corresponding to the media time
+	u64 media_ts_orig;
 	Bool has_media_time_shift;
 
-	u32 ocr_discontinuity_time;
+	//in ms without 32bit modulo
+	u64 ocr_discontinuity_time;
 	//we increment this one at each reset, and ask the filter chain to mark packets with this flag
 	u32 timeline_id;
 };
@@ -1959,16 +1974,16 @@ void gf_clock_reset(GF_Clock *ck);
 /*return clock time in ms*/
 u32 gf_clock_time(GF_Clock *ck);
 /*return media time in ms*/
-u32 gf_clock_media_time(GF_Clock *ck);
+u64 gf_clock_media_time(GF_Clock *ck);
 
-/*translates from clock time in ms to media time in ms*/
-u32 gf_clock_to_media_time(GF_Clock *ck, u32 clock_val);
+/*translates from clock time in ms to absolute media time in ms*/
+u64 gf_clock_to_media_time(GF_Clock *ck, u32 clock_val);
 
 /*return time in ms since clock started - may be different from clock time when seeking or live*/
 u32 gf_clock_elapsed_time(GF_Clock *ck);
 
 /*sets clock time - FIXME: drift updates for OCRs*/
-void gf_clock_set_time(GF_Clock *ck, u32 TS);
+void gf_clock_set_time(GF_Clock *ck, u64 ref_TS, u32 timescale);
 /*return clock time in ms without drift adjustment - used by audio objects only*/
 u32 gf_clock_real_time(GF_Clock *ck);
 /*pause the clock*/
@@ -1988,6 +2003,11 @@ void gf_clock_set_speed(GF_Clock *ck, Fixed speed);
 audio is usually send to the sound card quite ahead of time, depending on the output compositor settings*/
 void gf_clock_set_audio_delay(GF_Clock *ck, s32 ms_delay);
 
+//convert a 64-bit timestamp to clock time in ms. Clock times are always on 32 bits
+u32 gf_timestamp_to_clocktime(u64 ts, u32 timescale);
+
+//get absolute clock time in ms, including wrapping due to 32bit counting
+u64 gf_clock_time_absolute(GF_Clock *ck);
 
 /*OD manager*/
 
@@ -2032,6 +2052,13 @@ enum
 
 	/*flag indicates the odm is a target passthrough*/
 	GF_ODM_PASSTHROUGH = (1<<15),
+	/*flag indicates the clock is shared between tiles and a play should not trigger a rebuffer*/
+	GF_ODM_TILED_SHARED_CLOCK = (1<<16),
+	/*flag indicates TEMI info is associated with PID*/
+	GF_ODM_HAS_TEMI = (1<<17),
+
+	/*flag indicates this visual pid is a text subtitle*/
+	GF_ODM_IS_SPARSE = (1<<18),
 };
 
 enum
@@ -2084,6 +2111,9 @@ struct _od_manager
 	u32 ID;
 	u32 pid_id; //esid for clock solving
 
+	//MPEG-4 OD descriptor
+	GF_ObjectDescriptor *OD;
+
 	//parent service ID as defined from input
 	u32 ServiceID;
 	Bool hybrid_layered_coded;
@@ -2094,7 +2124,7 @@ struct _od_manager
 	Bool clock_inherited;
 	//0 or 1, except for IOD where we may have several BIFS/OD streams
 	u32 nb_buffering, nb_rebuffer;
-	u32 buffer_max_us, buffer_min_us, buffer_playout_us;
+	u32 buffer_max_ms, buffer_min_ms, buffer_playout_ms;
 	Bool blocking_media;
 
 	//internal hash for source allowing to distinguish input PIDs sources
@@ -2113,8 +2143,9 @@ struct _od_manager
 	/*number of channels with connection not yet acknowledge*/
 	u32 pending_channels;
 	u32 state;
-	/* during playback: timing as evaluated by the composition memory or the scene codec - this is the timestamp + media time at clock init*/
-	u32 media_current_time;
+	/* during playback: timing as evaluated by the composition memory or the scene codec, in absolute media time
+	or in absolute clock time if no media time mapping*/
+	u64 media_current_time;
 	/*full object duration 0 if unknown*/
 	u64 duration;
 	/*
@@ -2128,7 +2159,8 @@ struct _od_manager
 	u32 timeshift_depth;
 
 	u32 action_type;
-	s32 delay;
+	//delay in PID timescale
+	s64 timestamp_offset;
 	
 	Fixed set_speed;
 	Bool disable_buffer_at_next_play;
@@ -2139,7 +2171,7 @@ struct _od_manager
 #ifndef GPAC_DISABLE_VRML
 	/*the one and only media control currently attached to this object*/
 	struct _media_control *media_ctrl;
-	/*the list of media control controling the object*/
+	/*the list of media control controlling the object*/
 	GF_List *mc_stack;
 	/*the media sensor(s) attached to this object*/
 	GF_List *ms_stack;
@@ -2149,8 +2181,6 @@ struct _od_manager
 	GF_AddonMedia *addon;
 	//set for objects splicing the main content, indicates the media type (usually in @codec but no codec created for splicing)
 	u32 splice_addon_mtype;
-	//set to true if this is a scalable addon for an existing object
-	Bool scalable_addon;
 
 	//for a regular ODM, this indicates that the current scalable_odm associated
 	struct _od_manager *upper_layer_odm;
@@ -2175,7 +2205,7 @@ void gf_odm_del(GF_ObjectManager *ODMan);
 /*setup OD*/
 void gf_odm_setup_object(GF_ObjectManager *odm, GF_SceneNamespace *parent_ns, GF_FilterPid *for_pid);
 
-void gf_odm_setup_remote_object(GF_ObjectManager *odm, GF_SceneNamespace *parent_ns, char *remote_url);
+void gf_odm_setup_remote_object(GF_ObjectManager *odm, GF_SceneNamespace *parent_ns, char *remote_url, Bool for_addon);
 
 /*disctonnect OD and removes it if desired (otherwise only STOP is propagated)*/
 void gf_odm_disconnect(GF_ObjectManager *odman, u32 do_remove);
@@ -2226,6 +2256,8 @@ void gf_odm_reset_media_control(GF_ObjectManager *odm, Bool signal_reset);
 
 void gf_odm_check_clock_mediatime(GF_ObjectManager *odm);
 
+void gf_odm_addon_setup(GF_ObjectManager *odm);
+
 
 /*!
  *	Media Object types
@@ -2255,6 +2287,17 @@ enum
 /*! All Media Objects inserted through URLs and not MPEG-4 OD Framework use this ODID*/
 #define GF_MEDIA_EXTERNAL_ID		1050
 
+enum
+{
+	//no connection error, no frames seen in input pipeline
+	MO_CONNECT_OK=0,
+	//no connection error, frames seen in input pipeline but no frame yet available for object
+	MO_CONNECT_BUFFERING,
+	//explicit source setup failure
+	MO_CONNECT_FAILED,
+	//timeout of input pipeline (no frames seen after compositor->timeout ms)
+	MO_CONNECT_TIMEOUT
+};
 
 /*GF_MediaObject: link between real object manager and scene. although there is a one-to-one mapping between a
 MediaObject and an ObjectManager, we have to keep them separated in order to handle OD remove commands which destroy
@@ -2320,6 +2363,7 @@ struct _mediaobj
 	u64 channel_config;
 	Bool planar_audio;
 	u32 srd_x, srd_y, srd_w, srd_h, srd_full_w, srd_full_h;
+	u32 flip, rotate;
 
 	u32 quality_degradation_hint;
 	u32 nb_views;
@@ -2327,7 +2371,8 @@ struct _mediaobj
 	u32 view_min_x, view_max_x, view_min_y, view_max_y;
 	GF_FilterFrameInterface *frame_ifce;
 
-	Bool connect_failure;
+	Float c_x, c_y, c_w, c_h;
+	u32 connect_state;
 };
 
 GF_MediaObject *gf_mo_new();
@@ -2335,7 +2380,7 @@ GF_MediaObject *gf_mo_new();
 
 /*media access events */
 void gf_odm_service_media_event(GF_ObjectManager *odm, GF_EventType event_type);
-void gf_odm_service_media_event_with_download(GF_ObjectManager *odm, GF_EventType event_type, u64 loaded_size, u64 total_size, u32 bytes_per_sec);
+void gf_odm_service_media_event_with_download(GF_ObjectManager *odm, GF_EventType event_type, u64 loaded_size, u64 total_size, u32 bytes_per_sec, u32 buffer_level_plus_one, u32 min_buffer_time);
 
 /*checks the URL and returns the ODID (MPEG-4 od://) or GF_MEDIA_EXTERNAL_ID for all regular URLs*/
 u32 gf_mo_get_od_id(MFURL *url);
@@ -2353,8 +2398,8 @@ void gf_scene_message_ex(GF_Scene *scene, const char *service, const char *messa
 
 //returns media time in sec for the addon - timestamp_based is set to 1 if no timeline has been found (eg sync is based on direct timestamp comp)
 Double gf_scene_adjust_time_for_addon(GF_AddonMedia *addon, Double clock_time, u8 *timestamp_based);
-s64 gf_scene_adjust_timestamp_for_addon(GF_AddonMedia *addon, u64 orig_ts);
-void gf_scene_select_scalable_addon(GF_Scene *scene, GF_ObjectManager *odm);
+s64 gf_scene_adjust_timestamp_for_addon(GF_AddonMedia *addon, u64 orig_ts_ms);
+
 /*check if the associated addon has to be restarted, based on the timestamp of the main media (used for scalable addons only). Returns 1 if the addon has been restarted*/
 Bool gf_scene_check_addon_restart(GF_AddonMedia *addon, u64 cts, u64 dts);
 
@@ -2423,8 +2468,8 @@ void gf_scene_set_service_id(GF_Scene *scene, u32 service_id);
 
 /*post extended user mouse interaction to terminal
 	X and Y are point coordinates in the display expressed in 2D coord system top-left (0,0), Y increasing towards bottom
-	@xxx_but_down: specifiy whether the mouse button is down(2) or up (1), 0 if unchanged
-	@wheel: specifiy current wheel inc (0: unchanged , +1 for one wheel delta forward, -1 for one wheel delta backward)
+	@xxx_but_down: specify whether the mouse button is down(2) or up (1), 0 if unchanged
+	@wheel: specify current wheel inc (0: unchanged , +1 for one wheel delta forward, -1 for one wheel delta backward)
 */
 /*NOT NEEDED WHEN THE TERMINAL IS HANDLING THE DISPLAY WINDOW (cf user.h)*/
 void gf_sc_input_sensor_mouse_input(GF_Compositor *compositor, GF_EventMouse *event);
@@ -2516,7 +2561,7 @@ typedef struct _media_control
 
 	/*stream object list (segments)*/
 	GF_List *seg;
-	/*current active segment index (ie, controling the PLAY range of the media)*/
+	/*current active segment index (ie, controlling the PLAY range of the media)*/
 	u32 current_seg;
 } MediaControlStack;
 void InitMediaControl(GF_Scene *scene, GF_Node *node);

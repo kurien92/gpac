@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Graph sub-project
@@ -221,7 +221,7 @@ struct __tag_scene_graph
 	/*global qp used in BIFS coding*/
 	GF_Node *global_qp;
 #endif
-
+	Bool *destroy_cookie;
 
 #ifndef GPAC_DISABLE_SVG
 	/*use stack as used in the dom_fire_event - this is only valid during an event fire, and may be NULL*/
@@ -280,6 +280,7 @@ struct __tag_scene_graph
 
 	u32 (*get_element_class)(GF_Node *n);
 	u32 (*get_document_class)(GF_SceneGraph *n);
+	struct __gf_filter_session *attached_session;
 #endif
 };
 
@@ -305,8 +306,10 @@ GF_Node *gf_sg_new_base_node();
 struct _route
 {
 	u8 is_setup;
-	/*set to true for proto IS fields*/
+	/*set to 1 for proto IS fields*/
 	u8 IS_route;
+	/*set to 1 for JS route to fun*/
+	u8 script_route;
 
 	u32 ID;
 	char *name;
@@ -496,7 +499,7 @@ typedef struct _proto_instance
 	/*Prototype interface for coding and field addressing*/
 	GF_Proto *proto_interface;
 
-	/*proto implementation at run-time (aka the state of the nodes may differ accross
+	/*proto implementation at run-time (aka the state of the nodes may differ across
 	different instances of the proto)*/
 	GF_List *fields;
 
@@ -677,7 +680,7 @@ struct _smil_timing_rti
 	SMIL_Interval *current_interval;
 	SMIL_Interval *next_interval;
 
-	/* Evaluation of animations is postponed untill tree traversal, so that inherit values can be computed
+	/* Evaluation of animations is postponed until tree traversal, so that inherit values can be computed
 	Other timed elements (audio, video, animation) are evaluated directly and do not require
 	scene tree traversal.*/
 	Bool postpone;
@@ -942,7 +945,7 @@ GF_Err gf_dom_listener_del(GF_Node *listener, GF_DOMEventTarget *target);
 GF_DOMHandler *gf_dom_listener_build_ex(GF_Node *node, u32 event_type, u32 event_parameter, GF_Node *handler, GF_Node **out_listener);
 
 void	gf_dom_event_dump_listeners(GF_Node *n, FILE *f);
-void	gf_dom_event_remove_all_listeners(GF_DOMEventTarget *event_target);
+void	gf_dom_event_remove_all_listeners(GF_DOMEventTarget *event_target, GF_SceneGraph *sg);
 void	gf_dom_event_target_del(GF_DOMEventTarget *target);
 GF_Err	gf_dom_event_remove_listener_from_parent(GF_DOMEventTarget *event_target, GF_Node *listener);
 

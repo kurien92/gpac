@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2018
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / VideoToolBox decoder filter
@@ -28,7 +28,7 @@
 
 #include <gpac/thread.h>
 
-#if !defined(GPAC_DISABLE_AV_PARSERS) && ( defined(GPAC_CONFIG_DARWIN) || defined(GPAC_CONFIG_IOS) )
+#if !defined(GPAC_DISABLE_AV_PARSERS) && ( defined(GPAC_CONFIG_DARWIN) || defined(GPAC_CONFIG_IOS) ) && defined(GPAC_HAS_VTB)
 
 #include <stdint.h>
 
@@ -95,6 +95,7 @@ typedef struct
 	u32 cfg_crc;
 	u32 codecid;
 	Bool is_hardware;
+	Bool wait_rap;
 
 	GF_Err last_error;
 	
@@ -149,7 +150,7 @@ typedef struct
 
 	Bool profile_supported, can_reconfig;
 	u32 nb_consecutive_errors;
-	//openGL output
+	//OpenGL output
 #ifdef VTB_GL_TEXTURE
 	Bool use_gl_textures;
 	GF_CVGLTextureCacheREF cache_texture;
@@ -168,7 +169,7 @@ typedef struct __vtb_frame_ifce
 	CVPixelBufferRef frame;
 	GF_VTBDecCtx *ctx;
 	GF_FilterPacket *pck_src;
-	//openGL mode
+	//OpenGL mode
 #ifdef VTB_GL_TEXTURE
 	GF_CVGLTextureREF y, u, v;
 #endif
@@ -262,7 +263,7 @@ static void vtbdec_on_frame(void *opaque, void *sourceFrameRefCon, OSStatus stat
 			}
 		} else {
 			diff = (s64) (acts * timescale) - (s64) (cts * atimescale);
-			if ((diff>0) && (ctx->last_timescale_out * cts > timescale * ctx->last_cts_out) ) {
+			if ((diff>0) && gf_timestamp_greater(cts, timescale, ctx->last_cts_out, ctx->last_timescale_out) ) {
 				insert = GF_TRUE;
 			}
 		}
@@ -322,21 +323,27 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	u32 dsi_data_size=0;
 	u32 w, h;
 	GF_FilterPid *pid;
+	const char *codec_name = NULL;
 	w = h = 0;
 	
     dec_dsi = CFDictionaryCreateMutable(kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
-	if (ctx->ofmt==1) {
+	switch (ctx->ofmt) {
+	case GF_PIXEL_YUV:
 		kColorSpace = kCVPixelFormatType_420YpCbCr8Planar;
 		ctx->pix_fmt = GF_PIXEL_YUV;
-	} else if (ctx->ofmt==2) {
+		break;
+	case GF_PIXEL_RGB:
 		kColorSpace = kCVPixelFormatType_24RGB;
 		ctx->pix_fmt = GF_PIXEL_RGB;
-	} else {
+		break;
+	default:
 		kColorSpace = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
 		ctx->pix_fmt = GF_PIXEL_NV12;
+		break;
 	}
 
+	ctx->wait_rap = GF_TRUE;
 	ctx->reorder_probe = ctx->reorder;
 	ctx->reorder_detected = GF_FALSE;
 	pid = gf_list_get(ctx->streams, 0);
@@ -344,7 +351,10 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	if (p) w = p->value.uint;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_HEIGHT);
 	if (p) h = p->value.uint;
-
+	if (w && h) {
+		ctx->width = w;
+		ctx->height = h;
+	}
 
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DECODER_CONFIG);
 
@@ -354,8 +364,8 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 			s32 idx;
 			u32 i;
 			GF_AVCConfig *cfg;
-			GF_AVCConfigSlot *sps = NULL;
-			GF_AVCConfigSlot *pps = NULL;
+			GF_NALUFFParam *sps = NULL;
+			GF_NALUFFParam *pps = NULL;
 
 			for (i=0; i<gf_list_count(ctx->SPSs); i++) {
 				sps = gf_list_get(ctx->SPSs, i);
@@ -381,11 +391,12 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 			if (!pps) return GF_NON_COMPLIANT_BITSTREAM;
 			ctx->reconfig_needed = GF_FALSE;
 			
-			ctx->vtb_type = kCMVideoCodecType_H264;
+			ctx->vtb_type = 'avc1'; //kCMVideoCodecType_H264;
+			codec_name = "AVC|H264";
 
-			if (gf_media_avc_read_sps(sps->data, sps->size, &ctx->avc, 0, NULL)<0)
+			if (gf_avc_read_sps(sps->data, sps->size, &ctx->avc, 0, NULL)<0)
 				return GF_NON_COMPLIANT_BITSTREAM;
-			if (gf_media_avc_read_pps(pps->data, pps->size, &ctx->avc)<0)
+			if (gf_avc_read_pps(pps->data, pps->size, &ctx->avc)<0)
 				return GF_NON_COMPLIANT_BITSTREAM;
 
 			idx = ctx->active_sps;
@@ -473,12 +484,12 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 			s32 idx;
 			u32 i;
 			GF_HEVCConfig *cfg;
-			GF_HEVCParamArray *vpsa = NULL;
-			GF_HEVCParamArray *spsa = NULL;
-			GF_HEVCParamArray *ppsa = NULL;
-			GF_AVCConfigSlot *vps = NULL;
-			GF_AVCConfigSlot *sps = NULL;
-			GF_AVCConfigSlot *pps = NULL;
+			GF_NALUFFParamArray *vpsa = NULL;
+			GF_NALUFFParamArray *spsa = NULL;
+			GF_NALUFFParamArray *ppsa = NULL;
+			GF_NALUFFParam *vps = NULL;
+			GF_NALUFFParam *sps = NULL;
+			GF_NALUFFParam *pps = NULL;
 
 			for (i=0; i<gf_list_count(ctx->VPSs); i++) {
 				vps = gf_list_get(ctx->VPSs, i);
@@ -507,7 +518,8 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 			if (!pps) return GF_NON_COMPLIANT_BITSTREAM;
 			ctx->reconfig_needed = GF_FALSE;
 
-			ctx->vtb_type = kCMVideoCodecType_HEVC;
+			ctx->vtb_type = 'hvc1'; //kCMVideoCodecType_HEVC;
+			codec_name = "HEVC";
 
 			idx = ctx->active_sps;
 			ctx->width = ctx->hevc.sps[idx].width;
@@ -571,7 +583,7 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 
 			cfg->nal_unit_size = 4;
 
-			GF_SAFEALLOC(vpsa, GF_HEVCParamArray);
+			GF_SAFEALLOC(vpsa, GF_NALUFFParamArray);
 			if (!vpsa) return GF_OUT_OF_MEM;
 			vpsa->array_completeness = 1;
 			vpsa->type = GF_HEVC_NALU_VID_PARAM;
@@ -579,7 +591,7 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 			gf_list_add(vpsa->nalus, vps);
 			gf_list_add(cfg->param_array, vpsa);
 
-			GF_SAFEALLOC(spsa, GF_HEVCParamArray);
+			GF_SAFEALLOC(spsa, GF_NALUFFParamArray);
 			if (!spsa) return GF_OUT_OF_MEM;
 			spsa->array_completeness = 1;
 			spsa->type = GF_HEVC_NALU_SEQ_PARAM;
@@ -587,7 +599,7 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 			gf_list_add(spsa->nalus, sps);
 			gf_list_add(cfg->param_array, spsa);
 
-			GF_SAFEALLOC(ppsa, GF_HEVCParamArray);
+			GF_SAFEALLOC(ppsa, GF_NALUFFParamArray);
 			if (!ppsa) return GF_OUT_OF_MEM;
 			ppsa->array_completeness = 1;
 			ppsa->type = GF_HEVC_NALU_PIC_PARAM;
@@ -622,7 +634,8 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	case GF_CODECID_MPEG2_HIGH:
 	case GF_CODECID_MPEG2_422:
 
-        ctx->vtb_type = kCMVideoCodecType_MPEG2Video;
+        ctx->vtb_type = 'mp2v'; //kCMVideoCodecType_MPEG2Video;
+		codec_name = "MPEG2";
 		if (!ctx->width || !ctx->height) {
 			ctx->init_mpeg12 = GF_TRUE;
 			return GF_OK;
@@ -632,7 +645,8 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
         break;
 		
 	case GF_CODECID_MPEG1:
-		ctx->vtb_type = kCMVideoCodecType_MPEG1Video;
+		ctx->vtb_type = 'mp1v'; //kCMVideoCodecType_MPEG1Video;
+		codec_name = "MPEG1";
 		if (!ctx->width || !ctx->height) {
 			ctx->init_mpeg12 = GF_TRUE;
 			return GF_OK;
@@ -644,7 +658,8 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	{
 		char *vosh = NULL;
 		u32 vosh_size = 0;
-		ctx->vtb_type = kCMVideoCodecType_MPEG4Video;
+		ctx->vtb_type = 'mp4v'; //kCMVideoCodecType_MPEG4Video;
+		codec_name = "MPEG4";
 
 		if (!p || !p->value.data.ptr) {
 			vosh = ctx->vosh;
@@ -697,14 +712,34 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	case GF_CODECID_S263:
 		ctx->reorder_probe = 0;
 		ctx->reconfig_needed = GF_FALSE;
-		if (w && h) {
-			ctx->width = w;
-			ctx->height = h;
-			ctx->vtb_type = kCMVideoCodecType_H263;
-			break;
-		}
+		ctx->vtb_type = 'h263'; //kCMVideoCodecType_H263;
+		codec_name = "H263";
 		break;
-		
+
+	case GF_CODECID_AP4X:
+		ctx->vtb_type = 'ap4x'; //kCMVideoCodecType_AppleProRes4444XQ;
+		codec_name = "ProRes.AP4X";
+		break;
+	case GF_CODECID_AP4H:
+		ctx->vtb_type = 'ap4h'; //kCMVideoCodecType_AppleProRes4444;
+		codec_name = "ProRes.AP4H";
+		break;
+	case GF_CODECID_APCH:
+		ctx->vtb_type = 'apch'; // kCMVideoCodecType_AppleProRes422HQ;
+		codec_name = "ProRes.APCH";
+		break;
+	case GF_CODECID_APCN:
+		ctx->vtb_type = 'apcn'; // kCMVideoCodecType_AppleProRes422;
+		codec_name = "ProRes.APCN";
+		break;
+	case GF_CODECID_APCS:
+		ctx->vtb_type = 'apcs'; // kCMVideoCodecType_AppleProRes422LT;
+		codec_name = "ProRes.APCS";
+		break;
+	case GF_CODECID_APCO:
+		ctx->vtb_type = 'apco'; // kCMVideoCodecType_AppleProRes422Proxy;
+		codec_name = "ProRes.APCO";
+		break;
 	default :
 		ctx->reconfig_needed = GF_FALSE;
 		return GF_NOT_SUPPORTED;
@@ -789,24 +824,11 @@ static GF_Err vtbdec_init_decoder(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	ctx->profile_supported = GF_FALSE;
 	ctx->can_reconfig = !gf_opts_get_bool("core", "no-reassign");
 
-	switch (ctx->vtb_type) {
-	case kCMVideoCodecType_H264:
-		gf_filter_set_name(filter, ctx->is_hardware ? "VTB:Hardware:AVC|H264" : "VTB:Software:AVC|H264");
-		break;
-	case kCMVideoCodecType_MPEG2Video:
-		gf_filter_set_name(filter, ctx->is_hardware ? "VTB:Hardware:MPEG2" : "VTB:Software:MPEG2");
-		break;
-    case  kCMVideoCodecType_MPEG4Video:
-		gf_filter_set_name(filter, ctx->is_hardware ? "VTB:Hardware:MPEG4P2" : "VTB:Software:MPEG4P2");
-		break;
-    case kCMVideoCodecType_H263:
-		gf_filter_set_name(filter, ctx->is_hardware ? "VTB:Hardware:H263" : "VTB:Software:H263");
-		break;
-	case kCMVideoCodecType_MPEG1Video:
-		gf_filter_set_name(filter, ctx->is_hardware ? "VTB:Hardware:MPEG1" : "VTB:Software:MPEG1");
-		break;
-	default:
-		break;
+	if (codec_name) {
+		char szName[100];
+		snprintf(szName, 99, "VTB:%s:%s", ctx->is_hardware ? "Hardware" : "Software", codec_name);
+		szName[99] = 0;
+		gf_filter_set_name(filter, szName);
 	}
 	return GF_OK;
 }
@@ -822,37 +844,39 @@ static void vtbdec_register_param_sets(GF_VTBDecCtx *ctx, char *data, u32 size, 
 	else gf_bs_reassign_buffer(ctx->ps_bs, data, size);
 
 	if (hevc_nal_type) {
+#if !defined(GPAC_DISABLE_HEVC)
 		if (hevc_nal_type==GF_HEVC_NALU_SEQ_PARAM) {
 			dest = ctx->SPSs;
-			ps_id = gf_media_hevc_read_sps_bs(ctx->ps_bs, &ctx->hevc);
+			ps_id = gf_hevc_read_sps_bs(ctx->ps_bs, &ctx->hevc);
 			if (ps_id<0) return;
 		}
 		else if (hevc_nal_type==GF_HEVC_NALU_PIC_PARAM) {
 			dest = ctx->PPSs;
-			ps_id = gf_media_hevc_read_pps_bs(ctx->ps_bs, &ctx->hevc);
+			ps_id = gf_hevc_read_pps_bs(ctx->ps_bs, &ctx->hevc);
 			if (ps_id<0) return;
 		}
 		else if (hevc_nal_type==GF_HEVC_NALU_VID_PARAM) {
 			dest = ctx->VPSs;
-			ps_id = gf_media_hevc_read_vps_bs(ctx->ps_bs, &ctx->hevc);
+			ps_id = gf_hevc_read_vps_bs(ctx->ps_bs, &ctx->hevc);
 			if (ps_id<0) return;
 		}
+#endif //GPAC_DISABLE_HEVC
 
 	} else {
 		dest = is_sps ? ctx->SPSs : ctx->PPSs;
 
 		if (is_sps) {
-			ps_id = gf_media_avc_read_sps_bs(ctx->ps_bs, &ctx->avc, 0, NULL);
+			ps_id = gf_avc_read_sps_bs(ctx->ps_bs, &ctx->avc, 0, NULL);
 			if (ps_id<0) return;
 		} else {
-			ps_id = gf_media_avc_read_pps_bs(ctx->ps_bs, &ctx->avc);
+			ps_id = gf_avc_read_pps_bs(ctx->ps_bs, &ctx->avc);
 			if (ps_id<0) return;
 		}
 	}
 	
 	count = gf_list_count(dest);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *a_slc = gf_list_get(dest, i);
+		GF_NALUFFParam *a_slc = gf_list_get(dest, i);
 		if (a_slc->id != ps_id) continue;
 		//not same size or different content but same ID, remove old xPS
 		if ((a_slc->size != size) || memcmp(a_slc->data, data, size) ) {
@@ -866,8 +890,8 @@ static void vtbdec_register_param_sets(GF_VTBDecCtx *ctx, char *data, u32 size, 
 		break;
 	}
 	if (add) {
-		GF_AVCConfigSlot *slc;
-		GF_SAFEALLOC(slc, GF_AVCConfigSlot);
+		GF_NALUFFParam *slc;
+		GF_SAFEALLOC(slc, GF_NALUFFParam);
 		if (!slc) return;
 		slc->data = gf_malloc(size);
 		if (!slc->data) {
@@ -890,12 +914,12 @@ static u32 vtbdec_purge_param_sets(GF_VTBDecCtx *ctx, Bool is_sps, s32 idx)
 	//remove all xPS sharing the same ID, use only the last occurence
 	count = gf_list_count(dest);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *slc = gf_list_get(dest, i);
+		GF_NALUFFParam *slc = gf_list_get(dest, i);
 		if (slc->id != idx) continue;
 		crc_res = slc->crc;
 
 		for (j=i+1; j<count; j++) {
-			GF_AVCConfigSlot *a_slc = gf_list_get(dest, j);
+			GF_NALUFFParam *a_slc = gf_list_get(dest, j);
 			if (a_slc->id != slc->id) continue;
 			//not same size or different content but same ID, remove old xPS
 			if ((slc->size != a_slc->size) || memcmp(a_slc->data, slc->data, a_slc->size) ) {
@@ -915,7 +939,7 @@ static u32 vtbdec_purge_param_sets(GF_VTBDecCtx *ctx, Bool is_sps, s32 idx)
 static void vtbdec_del_param_list(GF_List *list)
 {
 	while (gf_list_count(list)) {
-		GF_AVCConfigSlot *slc = gf_list_get(list, 0);
+		GF_NALUFFParam *slc = gf_list_get(list, 0);
 		gf_free(slc->data);
 		gf_free(slc);
 		gf_list_rem(list, 0);
@@ -932,9 +956,11 @@ static GF_Err vtbdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 	GF_VTBDecCtx *ctx = gf_filter_get_udta(filter);
 
 	if (is_remove) {
-		if (ctx->opid) gf_filter_pid_remove(ctx->opid);
-		ctx->opid = NULL;
 		gf_list_del_item(ctx->streams, pid);
+		if (ctx->opid && !gf_list_count(ctx->streams)) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
 		return GF_OK;
 	}
 	if (! gf_filter_pid_check_caps(pid)) {
@@ -986,7 +1012,7 @@ static GF_Err vtbdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 
 	dsi = gf_filter_pid_get_property(pid, GF_PROP_PID_DECODER_CONFIG);
 	dsi_crc = dsi ? gf_crc_32(dsi->value.data.ptr, dsi->value.data.size) : 0;
-	if ((codecid==ctx->codecid) && (dsi_crc == ctx->cfg_crc) && ctx->width && ctx->height) {
+	if (ctx->opid && (codecid==ctx->codecid) && (dsi_crc == ctx->cfg_crc) && ctx->width && ctx->height) {
 		gf_filter_pid_copy_properties(ctx->opid, pid);
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_RAW) );
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DECODER_CONFIG, NULL);
@@ -1026,6 +1052,7 @@ static GF_Err vtbdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 
 	ctx->nalu_size_length = 0;
 	ctx->is_annex_b = GF_FALSE;
+	ctx->is_avc = ctx->is_hevc = GF_FALSE;
 
 	//check AVC config
 	if (codecid==GF_CODECID_AVC) {
@@ -1050,7 +1077,7 @@ static GF_Err vtbdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 			return GF_OK;
 		} else {
 			u32 i;
-			GF_AVCConfigSlot *slc;
+			GF_NALUFFParam *slc;
 			GF_AVCConfig *cfg = gf_odf_avc_cfg_read(dsi->value.data.ptr, dsi->value.data.size);
 			for (i=0; i<gf_list_count(cfg->sequenceParameterSets); i++) {
 				slc = gf_list_get(cfg->sequenceParameterSets, i);
@@ -1083,6 +1110,16 @@ static GF_Err vtbdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 				e = GF_OK;
 			}
 			gf_odf_avc_cfg_del(cfg);
+
+			if ((ctx->active_sps>=0) && ctx->avc.sps[ctx->active_sps].vui_parameters_present_flag) {
+				Bool full_range = ctx->avc.sps[ctx->active_sps].vui.video_full_range_flag;
+				u32 cmx = ctx->avc.sps[ctx->active_sps].vui.matrix_coefficients;
+				gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_RANGE, &PROP_BOOL(full_range));
+				gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_MX, &PROP_UINT(cmx));
+			} else {
+				gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_RANGE, NULL);
+				gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_MX, NULL);
+			}
 			return e;
 		}
 	}
@@ -1108,11 +1145,11 @@ static GF_Err vtbdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 			return GF_OK;
 		} else {
 			u32 i, j;
-			GF_AVCConfigSlot *slc;
+			GF_NALUFFParam *slc;
 			GF_HEVCConfig *cfg = gf_odf_hevc_cfg_read(dsi->value.data.ptr, dsi->value.data.size, GF_FALSE);
 
 			for (i=0; i<gf_list_count(cfg->param_array); i++) {
-				GF_HEVCParamArray *pa = gf_list_get(cfg->param_array, i);
+				GF_NALUFFParamArray *pa = gf_list_get(cfg->param_array, i);
 
 
 				for (j=0; j<gf_list_count(pa->nalus); j++) {
@@ -1139,6 +1176,16 @@ static GF_Err vtbdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 				e = GF_OK;
 			}
 			gf_odf_hevc_cfg_del(cfg);
+
+			if ((ctx->active_sps>=0) && ctx->hevc.sps[ctx->active_sps].vui_parameters_present_flag) {
+				Bool full_range = ctx->hevc.sps[ctx->active_sps].video_full_range_flag;
+				u32 cmx = ctx->hevc.sps[ctx->active_sps].matrix_coeffs;
+				gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_RANGE, &PROP_BOOL(full_range));
+				gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_MX, &PROP_UINT(cmx));
+			} else {
+				gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_RANGE, NULL);
+				gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_MX, NULL);
+			}
 			return e;
 		}
 	}
@@ -1214,7 +1261,7 @@ static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char 
 			}
 
 			if (nal_size > inBufferLength) {
-				GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[VTB] Error parsing NAL: size indicated %d but %d bytes only in payload\n", nal_size, inBufferLength));
+				GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[VTB] Error parsing NAL: size indicated %u but %u bytes only in payload\n", nal_size, inBufferLength));
 				break;
 			}
 			ptr += ctx->nalu_size_length;
@@ -1261,7 +1308,7 @@ static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char 
 				break;
 			}
 
-			gf_media_avc_parse_nalu(ctx->nal_bs, &ctx->avc);
+			gf_avc_parse_nalu(ctx->nal_bs, &ctx->avc);
 
 			if ((nal_type<=GF_AVC_NALU_IDR_SLICE) && ctx->avc.s_info.sps) {
 				if (ctx->avc.sps_active_idx != ctx->active_sps) {
@@ -1272,12 +1319,15 @@ static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char 
 				}
 			}
 		} else if (ctx->is_hevc) {
+#if defined(GPAC_DISABLE_HEVC)
+			return GF_NOT_SUPPORTED;
+#else
 			u8 temporal_id, ayer_id;
 
 			if (!ctx->nal_bs) ctx->nal_bs = gf_bs_new(ptr, nal_size, GF_BITSTREAM_READ);
 			else gf_bs_reassign_buffer(ctx->nal_bs, ptr, nal_size);
 
-			s32 res = gf_media_hevc_parse_nalu_bs(ctx->nal_bs, &ctx->hevc, &nal_type, &temporal_id, &ayer_id);
+			s32 res = gf_hevc_parse_nalu_bs(ctx->nal_bs, &ctx->hevc, &nal_type, &temporal_id, &ayer_id);
 			if (res>=0) {
 				switch (nal_type) {
 				case GF_HEVC_NALU_VID_PARAM:
@@ -1306,6 +1356,8 @@ static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char 
 					}
 				}
 			}
+#endif
+
 		}
 		
 		//if sps and pps are ready, init decoder
@@ -1380,7 +1432,7 @@ static GF_Err vtbdec_flush_frame(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	if (ctx->no_copy) return vtbdec_send_output_frame(filter, ctx);
 
 	vtbframe = gf_list_pop_front(ctx->frames);
-	GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[VTB] Outputing frame DTS "LLU" CTS "LLU" timescale %d\n", gf_filter_pck_get_dts(vtbframe->pck_src), gf_filter_pck_get_cts(vtbframe->pck_src), gf_filter_pck_get_timescale(vtbframe->pck_src)));
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[VTB] Outputting frame DTS "LLU" CTS "LLU" timescale %d\n", gf_filter_pck_get_dts(vtbframe->pck_src), gf_filter_pck_get_cts(vtbframe->pck_src), gf_filter_pck_get_timescale(vtbframe->pck_src)));
 
 
 	status = CVPixelBufferLockBaseAddress(vtbframe->frame, kCVPixelBufferLock_ReadOnly);
@@ -1405,6 +1457,7 @@ static GF_Err vtbdec_flush_frame(GF_Filter *filter, GF_VTBDecCtx *ctx)
 		u32 stride = (u32) CVPixelBufferGetBytesPerRowOfPlane(vtbframe->frame, 0);
 
 		GF_FilterPacket *dst_pck = gf_filter_pck_new_alloc(ctx->opid, ctx->out_size, &dst);
+		if (!dst_pck) return GF_OUT_OF_MEM;
 
 		//TOCHECK - for now the 3 planes are consecutive in VideoToolbox
 		if (stride==ctx->width) {
@@ -1440,7 +1493,9 @@ static GF_Err vtbdec_flush_frame(GF_Filter *filter, GF_VTBDecCtx *ctx)
 		}
 
 		gf_filter_pck_merge_properties(vtbframe->pck_src, dst_pck);
+		gf_filter_pck_set_dependency_flags(dst_pck, 0);
 		ctx->last_cts_out = gf_filter_pck_get_cts(vtbframe->pck_src);
+		gf_filter_pck_set_dts(dst_pck, ctx->last_cts_out);
 		ctx->last_timescale_out = gf_filter_pck_get_timescale(vtbframe->pck_src);
 		gf_filter_pck_unref(vtbframe->pck_src);
 		vtbframe->pck_src = NULL;
@@ -1450,6 +1505,7 @@ static GF_Err vtbdec_flush_frame(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	gf_list_add(ctx->frames_res, vtbframe);
 	return GF_OK;
 }
+
 static GF_Err vtbdec_process(GF_Filter *filter)
 {
     OSStatus status;
@@ -1482,9 +1538,7 @@ static GF_Err vtbdec_process(GF_Filter *filter)
 				return GF_OK;
 			}
 		}
-		dts = gf_filter_pck_get_dts(pck);
-		dts *= 1000;
-		dts /= gf_filter_pck_get_timescale(pck);
+		dts = gf_timestamp_rescale(gf_filter_pck_get_dts(pck), gf_filter_pck_get_timescale(pck), 1000);
 		if (!min_dts || (min_dts>dts)) {
 			min_dts = dts;
 			ref_pid = pid;
@@ -1506,7 +1560,11 @@ static GF_Err vtbdec_process(GF_Filter *filter)
 		gf_filter_pid_drop_packet(ref_pid);
 		return GF_OK;
 	}
-
+	if (ctx->wait_rap && !gf_filter_pck_get_sap(pck)) {
+		gf_filter_pid_drop_packet(ref_pid);
+		return GF_OK;
+	}
+	ctx->wait_rap = GF_FALSE;
 	in_buffer = (char *) gf_filter_pck_get_data(pck, &in_buffer_size);
 
 	//discard empty packets
@@ -1844,7 +1902,7 @@ static GF_Err vtbdec_send_output_frame(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	vtb_frame = gf_list_pop_front(ctx->frames);
 	if (!vtb_frame) return GF_BAD_PARAM;
 
-	GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[VTB] Outputing frame DTS "LLU" CTS "LLU" timescale %d\n", gf_filter_pck_get_dts(vtb_frame->pck_src), gf_filter_pck_get_cts(vtb_frame->pck_src), gf_filter_pck_get_timescale(vtb_frame->pck_src)));
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[VTB] Outputting frame DTS "LLU" CTS "LLU" timescale %d\n", gf_filter_pck_get_dts(vtb_frame->pck_src), gf_filter_pck_get_cts(vtb_frame->pck_src), gf_filter_pck_get_timescale(vtb_frame->pck_src)));
 
 	vtb_frame->frame_ifce.user_data = vtb_frame;
 	vtb_frame->frame_ifce.get_plane = vtbframe_get_plane;
@@ -1859,10 +1917,13 @@ static GF_Err vtbdec_send_output_frame(GF_Filter *filter, GF_VTBDecCtx *ctx)
 	safe_int_inc(&ctx->decoded_frames_pending);
 
 	dst_pck = gf_filter_pck_new_frame_interface(ctx->opid, &vtb_frame->frame_ifce, vtbframe_release);
+	if (!dst_pck) return GF_OUT_OF_MEM;
 
 	gf_filter_pck_merge_properties(vtb_frame->pck_src, dst_pck);
+	gf_filter_pck_set_dependency_flags(dst_pck, 0);
 
 	ctx->last_cts_out = gf_filter_pck_get_cts(vtb_frame->pck_src);
+	gf_filter_pck_set_dts(dst_pck, ctx->last_cts_out);
 	ctx->last_timescale_out = gf_filter_pck_get_timescale(vtb_frame->pck_src);
 	gf_filter_pck_unref(vtb_frame->pck_src);
 	vtb_frame->pck_src = NULL;
@@ -1950,9 +2011,9 @@ static const GF_FilterCapability VTBDecCaps[] =
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG4_PART2),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_AVC),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_HEVC),
-	CAP_BOOL(GF_CAPS_INPUT_EXCLUDED,GF_PROP_PID_TILE_BASE, GF_TRUE),
+	{ .code=GF_PROP_PID_SCALABLE, .val={.type=GF_PROP_BOOL, .value.boolean = GF_TRUE}, .flags=(GF_CAPS_INPUT_OPT), .priority=255 },
+	CAP_BOOL(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_TILE_BASE, GF_TRUE),
 
-#ifndef GPAC_CONFIG_IOS
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG2_SIMPLE),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG2_MAIN),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG2_SNR),
@@ -1961,7 +2022,13 @@ static const GF_FilterCapability VTBDecCaps[] =
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG2_422),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_H263),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_S263),
-#endif
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_AP4X),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_AP4H),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_APCH),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_APCN),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_APCS),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_APCO),
+
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_CODECID, GF_CODECID_RAW),
 };
@@ -1971,8 +2038,8 @@ static const GF_FilterCapability VTBDecCaps[] =
 static const GF_FilterArgs VTBDecArgs[] =
 {
 	{ OFFS(reorder), "number of frames to wait for temporal re-ordering", GF_PROP_UINT, "6", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(no_copy), "dispatch VTB frames into filter chain (no copy)", GF_PROP_BOOL, "true", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(ofmt), "set default pixel format for decoded video. If not matched default to nv12", GF_PROP_PIXFMT, "nv12", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(no_copy), "dispatch decoded frames as OpenGL textures (true) or as copied packets (false) ", GF_PROP_BOOL, "true", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(ofmt), "set default pixel format for decoded video. If not found, fall back to `nv12`", GF_PROP_PIXFMT, "nv12", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(disable_hw), "disable hardware decoding", GF_PROP_BOOL, "false", NULL, 0},
 	{}
 };
@@ -1980,7 +2047,7 @@ static const GF_FilterArgs VTBDecArgs[] =
 GF_FilterRegister GF_VTBDecCtxRegister = {
 	.name = "vtbdec",
 	GF_FS_SET_DESCRIPTION("VideoToolBox decoder")
-	GF_FS_SET_HELP("This filter decodes MPEG-2, H263, AVC|H264 and HEVC streams through VideoToolBox. It allows GPU frame dispatch or direct frame copy.")
+	GF_FS_SET_HELP("This filter decodes video streams through OSX/iOS VideoToolBox (MPEG-2, H263, AVC|H264, HEVC, ProRes). It allows GPU frame dispatch or direct frame copy.")
 	.private_size = sizeof(GF_VTBDecCtx),
 	.args = VTBDecArgs,
 	.priority = 1,
@@ -1989,7 +2056,6 @@ GF_FilterRegister GF_VTBDecCtxRegister = {
 	.finalize = vtbdec_finalize,
 	.configure_pid = vtbdec_configure_pid,
 	.process = vtbdec_process,
-	.max_extra_pids = 5,
 	.process_event = vtbdec_process_event,
 };
 
@@ -1998,11 +2064,11 @@ GF_FilterRegister GF_VTBDecCtxRegister = {
 #include <gpac/maths.h>
 #include <gpac/filters.h>
 
-#endif // !defined(GPAC_DISABLE_AV_PARSERS) && ( defined(GPAC_CONFIG_DARWIN) || defined(GPAC_CONFIG_IOS) )
+#endif // !defined(GPAC_DISABLE_AV_PARSERS) && ( defined(GPAC_CONFIG_DARWIN) || defined(GPAC_CONFIG_IOS) ) && defined(GPAC_HAS_VTB)
 
 const GF_FilterRegister *vtbdec_register(GF_FilterSession *session)
 {
-#if !defined(GPAC_DISABLE_AV_PARSERS) && ( defined(GPAC_CONFIG_DARWIN) || defined(GPAC_CONFIG_IOS) )
+#if !defined(GPAC_DISABLE_AV_PARSERS) && ( defined(GPAC_CONFIG_DARWIN) || defined(GPAC_CONFIG_IOS) ) && defined(GPAC_HAS_VTB)
 	return &GF_VTBDecCtxRegister;
 #else
 	return NULL;

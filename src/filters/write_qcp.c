@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2018
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / QCP stream to file filter
@@ -70,7 +70,10 @@ GF_Err qcpmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 
 	if (is_remove) {
 		ctx->ipid = NULL;
-		gf_filter_pid_remove(ctx->opid);
+		if (ctx->opid) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
 		return GF_OK;
 	}
 	if (! gf_filter_pid_check_caps(pid))
@@ -124,25 +127,25 @@ GF_Err qcpmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 	ctx->first = GF_TRUE;
 
 	if (ctx->exporter) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("Exporting %s - SampleRate %d %d channels %d bits per sample\n", gf_codecid_name(ctx->codecid), sr, chan, bps));
+		GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("Exporting %s - SampleRate %d %d channels %d bits per sample\n", gf_codecid_name(ctx->codecid), sr, chan, bps));
 	}
 
 	ctx->ipid = pid;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DURATION);
-	if (p) ctx->duration = p->value.lfrac;
+	if (p && (p->value.lfrac.num>0)) ctx->duration = p->value.lfrac;
 
 	gf_filter_pid_set_framing_mode(pid, GF_TRUE);
 
 	p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_MEDIA_DATA_SIZE);
 	if (!p) {
-		GF_LOG(GF_LOG_WARNING, GF_LOG_AUTHOR, ("[QCP] Unknown total media size, cannot write QCP file right away\n"));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[QCP] Unknown total media size, cannot write QCP file right away\n"));
 		ctx->data_size = 0;
 	} else {
 		ctx->data_size = (u32) p->value.longuint;
 	}
 	p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_NB_FRAMES);
 	if (!p) {
-		GF_LOG(GF_LOG_WARNING, GF_LOG_AUTHOR, ("[QCP] Unknown total number of media frames, cannot write QCP file\n"));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[QCP] Unknown total number of media frames, cannot write QCP file\n"));
 		ctx->nb_frames = 0;
 	} else {
 		ctx->nb_frames = (u32) p->value.uint;
@@ -204,6 +207,8 @@ static void qcpmx_send_header(GF_QCPMxCtx *ctx, u32 data_size, u32 frame_count)
 	size += 8;
 	size -= data_size;
 	dst_pck = gf_filter_pck_new_alloc(ctx->opid, size, &output);
+	if (!dst_pck) return;
+
 	bs = gf_bs_new(output, size, GF_BITSTREAM_WRITE);
 
 	gf_bs_write_data(bs, "RIFF", 4);
@@ -276,10 +281,12 @@ GF_Err qcpmx_process(GF_Filter *filter)
 			}
 			if (ctx->has_qcp_pad) {
 				dst_pck = gf_filter_pck_new_alloc(ctx->opid, 1, &output);
-				output[0] = 0;
-				gf_filter_pck_set_framing(dst_pck, GF_FALSE, GF_TRUE);
-				ctx->has_qcp_pad = GF_FALSE;
-				gf_filter_pck_send(dst_pck);
+				if (dst_pck) {
+					output[0] = 0;
+					gf_filter_pck_set_framing(dst_pck, GF_FALSE, GF_TRUE);
+					ctx->has_qcp_pad = GF_FALSE;
+					gf_filter_pck_send(dst_pck);
+				}
 			}
 			gf_filter_pid_set_eos(ctx->opid);
 			return GF_EOS;
@@ -310,17 +317,21 @@ GF_Err qcpmx_process(GF_Filter *filter)
 			}
 		}
 		if (!rate_found) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_AUTHOR, ("[QCP] Frame size %d not in rate table, ignoring frame\n", pck_size));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[QCP] Frame size %d not in rate table, ignoring frame\n", pck_size));
 			gf_filter_pid_drop_packet(ctx->ipid);
 			return GF_NON_COMPLIANT_BITSTREAM;
 		}
 
 		dst_pck = gf_filter_pck_new_alloc(ctx->opid, size, &output);
-		output[0] = rate_found;
-		memcpy(output+1, data, pck_size);
+		if (dst_pck) {
+			output[0] = rate_found;
+			memcpy(output+1, data, pck_size);
+		}
 	} else {
-		dst_pck = gf_filter_pck_new_ref(ctx->opid, data, size, pck);
+		//send the complete data
+		dst_pck = gf_filter_pck_new_ref(ctx->opid, 0, size, pck);
 	}
+	if (!dst_pck) return GF_OUT_OF_MEM;
 
 	gf_filter_pck_merge_properties(pck, dst_pck);
 	gf_filter_pck_set_byte_offset(dst_pck, GF_FILTER_NO_BO);
@@ -366,7 +377,7 @@ static const GF_FilterArgs QCPMxArgs[] =
 GF_FilterRegister QCPMxRegister = {
 	.name = "writeqcp",
 	GF_FS_SET_DESCRIPTION("QCP writer")
-	GF_FS_SET_HELP("This filter converts a single stream to a QCP output file.")
+	GF_FS_SET_HELP("This filter converts a single QCELP, EVRC or MSV stream to a QCP output file.")
 	.private_size = sizeof(GF_QCPMxCtx),
 	.args = QCPMxArgs,
 	SETCAPS(QCPMxCaps),

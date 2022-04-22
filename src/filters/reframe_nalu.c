@@ -2,10 +2,10 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
- *  This file is part of GPAC / NALU (AVC & HEVC)  reframer filter
+ *  This file is part of GPAC / NALU (AVC, HEVC, VVC)  reframer filter
  *
  *  GPAC is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -34,16 +34,23 @@
 
 #define CTS_POC_OFFSET_SAFETY	1000
 
-//storage for nal header + slice header when not fully included in an input buffer - this needs to be big enough to hold a slice header
-//note that we only copy the entire input packet in an internal buffer when the current NAL needs to be fully available for parsing (VPS, SPS, PPS),
-//or for temporary storage (SEI)
-//otherwise we copy remaining bytes in the hdr store if a startcode may be split across two input packets
-#define SAFETY_NAL_STORE	50
+GF_Err gf_bs_set_logger(GF_BitStream *bs, void (*on_bs_log)(void *udta, const char *field_name, u32 nb_bits, u64 field_val, s32 idx1, s32 idx2, s32 idx3), void *udta);
+
+
+enum
+{
+	DVMODE_NONE=0,
+	DVMODE_AUTO,
+	DVMODE_FORCE,
+	DVMODE_CLEAN,
+	DVMODE_SINGLE,
+};
 
 typedef struct
 {
 	u64 pos;
 	Double duration;
+	u32 roll_count;
 } NALUIdx;
 
 
@@ -53,14 +60,23 @@ typedef struct
 	u32 min_temporal_id, max_temporal_id;
 } LHVCLayerInfo;
 
+enum {
+	STRICT_POC_OFF = 0,
+	STRICT_POC_ON,
+	STRICT_POC_ERROR,
+};
+
 typedef struct
 {
 	//filter args
 	GF_Fraction fps;
 	Double index;
-	Bool explicit, force_sync, strict_poc, nosei, importer, subsamples, nosvc, novpsext, deps, seirw, audelim, analyze;
+	Bool explicit, force_sync, nosei, importer, subsamples, nosvc, novpsext, deps, seirw, audelim, analyze, notime;
 	u32 nal_length;
-	GF_Fraction idur;
+	u32 strict_poc;
+	u32 bsdbg;
+	GF_Fraction dur;
+	u32 dv_mode, dv_profile, dv_compatid;
 
 	//only one input pid declared
 	GF_FilterPid *ipid;
@@ -72,7 +88,7 @@ typedef struct
 	//write bitstream for nalus size length rewrite
 	GF_BitStream *bs_w;
 	//current CTS/DTS of the stream, may be overridden by input packet if not file (eg TS PES)
-	u64 cts, dts, prev_dts;
+	u64 cts, dts, prev_dts, prev_cts;
 	u32 pck_duration;
 	//basic config stored here: with, height CRC of base and enh layer decoder config, sample aspect ratio
 	//when changing, a new pid config will be emitted
@@ -87,6 +103,8 @@ typedef struct
 	Double start_range;
 	//indicates we are in seek, packets before start range should be marked
 	Bool in_seek;
+	u32 seek_gdr_count;
+	Bool first_gdr;
 	//set once we play something
 	Bool is_playing;
 	//is a file, is a file fully loaded on disk (local or download done)
@@ -97,7 +115,6 @@ typedef struct
 	//list of RAP entry points
 	NALUIdx *indexes;
 	u32 index_alloc_size, index_size;
-
 
 	//timescale of the input pid if any, 0 otherwise
 	u32 timescale;
@@ -119,33 +136,31 @@ typedef struct
 	Bool nal_adjusted;
 
 	//avc/hevc switch
-	Bool is_hevc;
+	u32 codecid;
 	//name of the logger
 	const char *log_name;
 
 	//list of packet (in decode order !!) not yet dispatched.
 	//Dispatch depends on the mode:
 	//strict_poc=0: we wait after each IDR until we find a stable poc diff between pictures, controled by poc_probe_done
-	//strict_poc=1: we dispatch only after IDR or at the end (huge delay)
+	//strict_poc>=1: we dispatch only after IDR or at the end (huge delay)
 	GF_List *pck_queue;
 	//dts of the last IDR found
 	u64 dts_last_IDR;
 	//max size of NALUs in the bitstream
 	u32 max_nalu_size;
 
-	//we store a few bytes here to make sure we have at least start code and NAL type
-	//we also store here NALUs we must completely parse (xPS, SEIs)
-	u32 bytes_in_header;
-	char *hdr_store;
-	u32 hdr_store_size, hdr_store_alloc;
+
+	u8 *nal_store;
+	u32 nal_store_size, nal_store_alloc;
 
 	//list of param sets found
-	GF_List *sps, *pps, *vps, *sps_ext, *pps_svc;
+	GF_List *sps, *pps, *vps, *sps_ext, *pps_svc, *vvc_aps_pre, *vvc_dci;
 	//set to true if one of the PS has been modified, will potentially trigger a PID reconfigure
 	Bool ps_modified;
 
 	//stats
-	u32 nb_idr, nb_i, nb_p, nb_b, nb_sp, nb_si, nb_sei, nb_nalus, nb_aud;
+	u32 nb_idr, nb_i, nb_p, nb_b, nb_sp, nb_si, nb_sei, nb_nalus, nb_aud, nb_cra;
 
 	//frame has intra slice
 	Bool has_islice;
@@ -153,6 +168,8 @@ typedef struct
 	GF_FilterSAPType au_sap;
 	//frame first slice
 	Bool first_slice_in_au;
+	//frame first slice
+	Bool au_sap2_poc_reset;
 	//paff used - NEED FURTHER CHECKING
 	Bool is_paff;
 	Bool bottom_field_flag;
@@ -170,8 +187,6 @@ typedef struct
 	Bool has_ref_slices;
 	//frame has redundant coding
 	Bool has_redundant;
-
-	Bool next_nal_end_skip;
 
 	Bool last_frame_is_idr;
 
@@ -199,28 +214,51 @@ typedef struct
 	HEVCState *hevc_state;
 	//shvc stats
 	u32 nb_e_idr, nb_e_i, nb_e_p, nb_e_b;
+	Bool vvc_no_stats;
 
 	LHVCLayerInfo linf[64];
 	u8 max_temporal_id[64];
 	u8 min_layer_id;
 
+	//VVC specific
+	VVCState *vvc_state;
+
 	Bool has_initial_aud;
 	char init_aud[3];
 
-	Bool interlaced, eos_in_bs;
+	Bool interlaced;
 
 	Bool is_mvc;
+
+	u32 bitrate;
+	u32 nb_frames;
+
+	//layer and temporal ID of last VCL nal
+	u8 last_layer_id, last_temporal_id;
+
+	u32 clli_crc, mdcv_crc;
+
+	u32 nb_dv_rpu, nb_dv_el;
 } GF_NALUDmxCtx;
+
+static void naludmx_enqueue_or_dispatch(GF_NALUDmxCtx *ctx, GF_FilterPacket *n_pck, Bool flush_ref);
+static void naludmx_finalize_au_flags(GF_NALUDmxCtx *ctx);
+static void naludmx_reset_param_sets(GF_NALUDmxCtx *ctx, Bool do_free);
+static void naludmx_set_dolby_vision(GF_NALUDmxCtx *ctx);
 
 
 GF_Err naludmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 {
 	const GF_PropertyValue *p;
+	u32 old_codecid;
 	GF_NALUDmxCtx *ctx = gf_filter_get_udta(filter);
 
 	if (is_remove) {
 		ctx->ipid = NULL;
-		if (ctx->opid) gf_filter_pid_remove(ctx->opid);
+		if (ctx->opid) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
 		return GF_OK;
 	}
 	if (! gf_filter_pid_check_caps(pid))
@@ -240,13 +278,25 @@ GF_Err naludmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 		}
 	}
 
+	old_codecid = ctx->codecid;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_CODECID);
 	if (p) {
 		switch (p->value.uint) {
 		case GF_CODECID_HEVC:
 		case GF_CODECID_LHVC:
-			ctx->is_hevc = GF_TRUE;
+			ctx->codecid = GF_CODECID_HEVC;
 			break;
+		case GF_CODECID_VVC:
+			ctx->codecid = GF_CODECID_VVC;
+			break;
+		case GF_CODECID_AVC:
+		case GF_CODECID_AVC_PS:
+		case GF_CODECID_SVC:
+		case GF_CODECID_MVC:
+			ctx->codecid = GF_CODECID_AVC;
+			break;
+		default:
+			return GF_NOT_SUPPORTED;
 		}
 	}
 	else {
@@ -258,7 +308,12 @@ GF_Err naludmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 			|| strstr(p->value.string, "shvc")
 			|| strstr(p->value.string, "mhvc")
 			|| strstr(p->value.string, "lhvc")
-		) ) ctx->is_hevc = GF_TRUE;
+		) )
+			ctx->codecid = GF_CODECID_HEVC;
+		else if (p && p->value.string && (
+			strstr(p->value.string, "vvc")
+		) )
+			ctx->codecid = GF_CODECID_VVC;
 		else {
 			p = gf_filter_pid_get_property(pid, GF_PROP_PID_FILE_EXT);
 			if (p && p->value.string && (
@@ -268,17 +323,42 @@ GF_Err naludmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 				 || strstr(p->value.string, "shvc")
 				 || strstr(p->value.string, "mhvc")
 				 || strstr(p->value.string, "lhvc")
-			 ) ) ctx->is_hevc = GF_TRUE;
+			 ) )
+				ctx->codecid = GF_CODECID_HEVC;
+			else if (p && p->value.string && (
+				 strstr(p->value.string, "vvc")
+				 || strstr(p->value.string, "266")
+				 || strstr(p->value.string, "lvvc")
+			 ) )
+				ctx->codecid = GF_CODECID_VVC;
+			else
+				ctx->codecid = GF_CODECID_AVC;
 		}
 	}
-	if (ctx->is_hevc) {
+
+	if (old_codecid && (old_codecid != ctx->codecid)) {
+		naludmx_reset_param_sets(ctx, GF_FALSE);
+	}
+
+	if (ctx->codecid==GF_CODECID_HEVC) {
+#ifdef GPAC_DISABLE_HEVC
+		return GF_NOT_SUPPORTED;
+#else
 		ctx->log_name = "HEVC";
-		if (ctx->avc_state) gf_free(ctx->avc_state);
+		if (ctx->avc_state) { gf_free(ctx->avc_state); ctx->avc_state = NULL; }
+		if (ctx->vvc_state) { gf_free(ctx->vvc_state); ctx->vvc_state = NULL; }
 		if (!ctx->hevc_state) GF_SAFEALLOC(ctx->hevc_state, HEVCState);
 		ctx->min_layer_id = 0xFF;
+#endif
+	} else if (ctx->codecid==GF_CODECID_VVC) {
+		ctx->log_name = "VVC";
+		if (ctx->hevc_state) { gf_free(ctx->hevc_state); ctx->hevc_state = NULL; }
+		if (ctx->avc_state) { gf_free(ctx->avc_state); ctx->avc_state = NULL; }
+		if (!ctx->vvc_state) GF_SAFEALLOC(ctx->vvc_state, VVCState);
 	} else {
 		ctx->log_name = "AVC|H264";
-		if (ctx->hevc_state) gf_free(ctx->hevc_state);
+		if (ctx->hevc_state) { gf_free(ctx->hevc_state); ctx->hevc_state = NULL; }
+		if (ctx->vvc_state) { gf_free(ctx->vvc_state); ctx->vvc_state = NULL; }
 		if (!ctx->avc_state) GF_SAFEALLOC(ctx->avc_state, AVCState);
 	}
 	if (ctx->timescale && !ctx->opid) {
@@ -287,14 +367,37 @@ GF_Err naludmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 	}
 	ctx->full_au_source = GF_FALSE;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_UNFRAMED_FULL_AU);
-	if (p && p->value.boolean)
+	if (p && p->value.boolean) {
+		GF_FilterEvent fevt;
+		//this is a reframer used after an encoder, we want to make sure we have enough frames to compute POC otherwise we might block the chain
+		//by holding input packets - ask 1s by default
+		GF_FEVT_INIT(fevt, GF_FEVT_BUFFER_REQ, ctx->ipid);
+		fevt.buffer_req.pid_only = GF_TRUE;
+		fevt.buffer_req.max_buffer_us = 1000000;
+		gf_filter_pid_send_event(ctx->ipid, &fevt);
 		ctx->full_au_source = GF_TRUE;
+	}
+
+	//if source has no timescale, recompute time
+	if (!ctx->timescale) ctx->notime = GF_TRUE;
 
 	//copy properties at init or reconfig
 	if (ctx->opid) {
+		if (ctx->poc_probe_done) {
+			//full frame mode, flush everything before signaling discontinuity
+			//for other modes discontinuity we signal discontinuity before the current AU being reconstructed
+			if (ctx->full_au_source && ctx->first_pck_in_au)
+				naludmx_finalize_au_flags(ctx);
+
+			naludmx_enqueue_or_dispatch(ctx, NULL, GF_TRUE);
+		}
+		ctx->nal_store_size = 0;
 		gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, & PROP_UINT(GF_STREAM_VISUAL));
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT(ctx->is_hevc ? GF_CODECID_HEVC : GF_CODECID_AVC));
+		//don't change codec type if reframing an ES (for HLS SAES)
+		if (!ctx->timescale)
+			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, & PROP_UINT(GF_STREAM_VISUAL));
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT(ctx->codecid));
+
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, NULL);
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED_FULL_AU, NULL);
 		if (!gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_ID))
@@ -303,18 +406,81 @@ GF_Err naludmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 		ctx->ps_modified = GF_TRUE;
 		ctx->crc_cfg = ctx->crc_cfg_enh = 0;
 	}
-	
+
 	return GF_OK;
 }
 
+static u32 naludmx_next_start_code(GF_BitStream *bs, u64 offset, u64 fsize, u32 *sc_size)
+{
+	u32 pos=0, nb_zeros=0;
+	while (offset+pos<fsize) {
+		u8 b = gf_bs_read_u8(bs);
+		pos++;
+		switch (b) {
+		case 1:
+			//break at first 0xXX000001 or 0x00000001
+			if (nb_zeros>=2) {
+				*sc_size = (nb_zeros==2) ? 3 : 4;
+				return offset+pos;
+			}
+			nb_zeros = 0;
+			break;
+		case 0:
+			nb_zeros++;
+			break;
+		default:
+			nb_zeros=0;
+			break;
+		}
+	}
+	//eof
+	return 0;
+}
+
+void naludmx_probe_recovery_sei(GF_BitStream *bs, AVCState *avc)
+{
+	/*parse SEI*/
+	while (gf_bs_available(bs)) {
+		u32 ptype, psize;
+
+		ptype = 0;
+		while (1) {
+			u8 v = gf_bs_read_int(bs, 8);
+			ptype += v;
+			if (v != 0xFF) break;
+		}
+
+		psize = 0;
+		while (1) {
+			u8 v = gf_bs_read_int(bs, 8);
+			psize += v;
+			if (v != 0xFF) break;
+		}
+
+		if (ptype==6) {
+			avc->sei.recovery_point.frame_cnt = gf_bs_read_ue(bs);
+			avc->sei.recovery_point.valid = 1;
+			return;
+		}
+
+		gf_bs_skip_bytes(bs, psize);
+
+		ptype = gf_bs_peek_bits(bs, 8, 0);
+		if (ptype == 0x80) {
+			break;
+		}
+	}
+}
 
 static void naludmx_check_dur(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 {
 	FILE *stream;
 	GF_BitStream *bs;
-	u64 duration, cur_dur, nal_start, start_code_pos;
+	u64 duration, cur_dur, nal_start, filesize;
+	u32 probe_size=0, start_code_size;
 	AVCState *avc_state = NULL;
 	HEVCState *hevc_state = NULL;
+	VVCState *vvc_state = NULL;
 	Bool first_slice_in_pic = GF_TRUE;
 	const GF_PropertyValue *p;
 	const char *filepath = NULL;
@@ -330,31 +496,45 @@ static void naludmx_check_dur(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 	ctx->is_file = GF_TRUE;
 
 	if (ctx->index<0) {
-		p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_DOWN_SIZE);
-		if (!p || (p->value.longuint > 100000000)) {
-			GF_LOG(GF_LOG_INFO, GF_LOG_PARSER, ("[%s] Source file larger than 100M, skipping indexing\n", ctx->log_name));
+		if (gf_opts_get_bool("temp", "force_indexing")) {
+			ctx->index = 1.0;
 		} else {
-			ctx->index = -ctx->index;
+			p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_DOWN_SIZE);
+			if (!p || (p->value.longuint > 20000000)) {
+				GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("[%s] Source file larger than 20M, skipping indexing\n", ctx->log_name));
+				if (!gf_sys_is_test_mode())
+					probe_size = 20000000;
+			} else {
+				ctx->index = -ctx->index;
+			}
 		}
 	}
-	if (ctx->index<=0) {
+	if ((ctx->index<=0) && !probe_size) {
 		ctx->duration.num = 1;
 		ctx->file_loaded = GF_TRUE;
 		return;
 	}
 
-	if (ctx->is_hevc) {
+	if (ctx->codecid==GF_CODECID_HEVC) {
 		GF_SAFEALLOC(hevc_state, HEVCState);
 		if (!hevc_state) return;
+	} else if (ctx->codecid==GF_CODECID_VVC) {
+		GF_SAFEALLOC(vvc_state, VVCState);
+		if (!vvc_state) return;
 	} else {
 		GF_SAFEALLOC(avc_state, AVCState);
 		if (!avc_state) return;
 	}
 
-	stream = gf_fopen(filepath, "rb");
+	stream = gf_fopen_ex(filepath, NULL, "rb", GF_TRUE);
 	if (!stream) {
 		if (hevc_state) gf_free(hevc_state);
+		if (vvc_state) gf_free(vvc_state);
 		if (avc_state) gf_free(avc_state);
+		if (gf_fileio_is_main_thread(filepath)) {
+			ctx->duration.num = 1;
+			ctx->file_loaded = GF_TRUE;
+		}
 		return;
 	}
 	ctx->index_size = 0;
@@ -363,9 +543,10 @@ static void naludmx_check_dur(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 
 	bs = gf_bs_from_file(stream, GF_BITSTREAM_READ);
 	gf_bs_enable_emulation_byte_removal(bs, GF_TRUE);
+	filesize = gf_bs_available(bs);
 
-	start_code_pos = gf_bs_get_position(bs);
-	if (!gf_media_nalu_is_start_code(bs)) {
+	nal_start = naludmx_next_start_code(bs, 0, filesize, &start_code_size);
+	if (!nal_start) {
 		if (hevc_state) gf_free(hevc_state);
 		if (avc_state) gf_free(avc_state);
 		gf_bs_del(bs);
@@ -375,20 +556,18 @@ static void naludmx_check_dur(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 		return;
 	}
 
-	nal_start = gf_bs_get_position(bs);
-
-	while (gf_bs_available(bs)) {
-		u32 nal_size;
+	while (1) {
 		s32 res;
+		u32 gdr_frame_count = 0;
 		Bool is_rap = GF_FALSE;
 		Bool is_slice = GF_FALSE;
-		nal_size = gf_media_nalu_next_start_code_bs(bs);
 
-		gf_bs_seek(bs, nal_start);
+		//parse directly from current pos (next byte is first byte of nal hdr)
 		if (hevc_state) {
+#ifndef GPAC_DISABLE_HEVC
 			u8 temporal_id, layer_id, nal_type;
 
-			res = gf_media_hevc_parse_nalu_bs(bs, hevc_state, &nal_type, &temporal_id, &layer_id);
+			res = gf_hevc_parse_nalu_bs(bs, hevc_state, &nal_type, &temporal_id, &layer_id);
 			if (res>0) first_slice_in_pic = GF_TRUE;
 			switch (nal_type) {
 			case GF_HEVC_NALU_SLICE_IDR_N_LP:
@@ -413,23 +592,43 @@ static void naludmx_check_dur(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 				is_slice = GF_TRUE;
 				break;
 			}
+			//also mark first slice in gdr as valid seek point
+			if (is_slice && hevc_state->sei.recovery_point.valid) {
+				is_rap = GF_TRUE;
+				hevc_state->sei.recovery_point.valid = GF_FALSE;
+				gdr_frame_count = hevc_state->sei.recovery_point.frame_cnt;
+			}
+#endif // GPAC_DISABLE_HEVC
+		} else if (vvc_state) {
+
+			u8 temporal_id, layer_id, nal_type;
+
+			res = gf_vvc_parse_nalu_bs(bs, vvc_state, &nal_type, &temporal_id, &layer_id);
+			if (res>0) first_slice_in_pic = GF_TRUE;
+			switch (nal_type) {
+			case GF_VVC_NALU_SLICE_TRAIL:
+			case GF_VVC_NALU_SLICE_STSA:
+			case GF_VVC_NALU_SLICE_RADL:
+			case GF_VVC_NALU_SLICE_RASL:
+				is_slice = GF_TRUE;
+				break;
+			case GF_VVC_NALU_SLICE_IDR_W_RADL:
+			case GF_VVC_NALU_SLICE_IDR_N_LP:
+			case GF_VVC_NALU_SLICE_CRA:
+			case GF_VVC_NALU_SLICE_GDR:
+				is_rap = GF_TRUE;
+				is_slice = GF_TRUE;
+				if (vvc_state->s_info.gdr_pic)
+					gdr_frame_count = vvc_state->s_info.gdr_recovery_count;
+				break;
+			}
 		} else {
 			u32 nal_type;
-			u64 pos = gf_bs_get_position(bs);
-			res = gf_media_avc_parse_nalu(bs, avc_state);
+			res = gf_avc_parse_nalu(bs, avc_state);
 			if (res>0) first_slice_in_pic = GF_TRUE;
 
 			nal_type = avc_state->last_nal_type_parsed;
-
 			switch (nal_type) {
-			case GF_AVC_NALU_SEQ_PARAM:
-				gf_bs_seek(bs, pos);
-				gf_media_avc_read_sps_bs(bs, avc_state, GF_FALSE, NULL);
-				break;
-			case GF_AVC_NALU_PIC_PARAM:
-				gf_bs_seek(bs, pos);
-				gf_media_avc_read_pps_bs(bs, avc_state);
-				break;
 			case GF_AVC_NALU_IDR_SLICE:
 				is_rap = GF_TRUE;
 				is_slice = GF_TRUE;
@@ -440,16 +639,31 @@ static void naludmx_check_dur(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 			case GF_AVC_NALU_DP_C_SLICE:
 				is_slice = GF_TRUE;
 				break;
+			case GF_AVC_NALU_SEI:
+				naludmx_probe_recovery_sei(bs, avc_state);
+				break;
+			
+			}
+			//also mark open GOP or first slice in gdr as valid seek point
+			if (is_slice && avc_state->sei.recovery_point.valid) {
+				is_rap = GF_TRUE;
+				avc_state->sei.recovery_point.valid = GF_FALSE;
+				gdr_frame_count = avc_state->sei.recovery_point.frame_cnt;
 			}
 		}
 
-		if (is_rap && first_slice_in_pic && (cur_dur >= ctx->index * ctx->cur_fps.num) ) {
+		if (probe_size && (nal_start>probe_size) && is_rap) {
+			break;
+		}
+
+		if (!probe_size && is_rap && first_slice_in_pic && (cur_dur >= ctx->index * ctx->cur_fps.num) ) {
 			if (!ctx->index_alloc_size) ctx->index_alloc_size = 10;
 			else if (ctx->index_alloc_size == ctx->index_size) ctx->index_alloc_size *= 2;
 			ctx->indexes = gf_realloc(ctx->indexes, sizeof(NALUIdx)*ctx->index_alloc_size);
-			ctx->indexes[ctx->index_size].pos = start_code_pos;
+			ctx->indexes[ctx->index_size].pos = nal_start - start_code_size;
 			ctx->indexes[ctx->index_size].duration = (Double) duration;
 			ctx->indexes[ctx->index_size].duration /= ctx->cur_fps.num;
+			ctx->indexes[ctx->index_size].roll_count = gdr_frame_count;
 			ctx->index_size ++;
 			cur_dur = 0;
 		}
@@ -460,36 +674,40 @@ static void naludmx_check_dur(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 			first_slice_in_pic = GF_FALSE;
 		}
 
-		gf_bs_seek(bs, nal_start + nal_size);
-/*		nal_start = gf_media_nalu_next_start_code_bs(bs);
-		if (nal_start) gf_bs_skip_bytes(bs, nal_start);
-*/
-		if (gf_bs_available(bs)<4)
+		//align since some NAL parsing may stop anywhere
+		gf_bs_align(bs);
+		nal_start = naludmx_next_start_code(bs, gf_bs_get_position(bs), filesize, &start_code_size);
+		if (!nal_start)
 			break;
-
-		start_code_pos = gf_bs_get_position(bs);
-		nal_start = gf_media_nalu_is_start_code(bs);
-		if (!nal_start) {
-			break;
-		}
-		nal_start = gf_bs_get_position(bs);
 	}
+	if (probe_size)
+		probe_size = gf_bs_get_position(bs);
 
 	gf_bs_del(bs);
 	gf_fclose(stream);
 	if (hevc_state) gf_free(hevc_state);
+	if (vvc_state) gf_free(vvc_state);
 	if (avc_state) gf_free(avc_state);
 
 	if (!ctx->duration.num || (ctx->duration.num  * ctx->cur_fps.num != duration * ctx->duration.den)) {
+		if (probe_size) {
+			duration *= filesize/probe_size;
+		}
 		ctx->duration.num = (s32) duration;
+		if (probe_size) ctx->duration.num = -ctx->duration.num;
 		ctx->duration.den = ctx->cur_fps.num;
 
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DURATION, & PROP_FRAC64(ctx->duration));
+
+		if (duration && (!gf_sys_is_test_mode() || gf_opts_get_bool("temp", "force_indexing"))) {
+			filesize *= 8 * ctx->duration.den;
+			filesize /= ctx->duration.num;
+			ctx->bitrate = (u32) filesize;
+		}
 	}
 
 	p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_FILE_CACHED);
 	if (p && p->value.boolean) ctx->file_loaded = GF_TRUE;
-	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CAN_DATAREF, & PROP_BOOL(GF_TRUE ) );
 }
 
 
@@ -498,7 +716,39 @@ static void naludmx_enqueue_or_dispatch(GF_NALUDmxCtx *ctx, GF_FilterPacket *n_p
 	//TODO: we are dispatching frames in "negctts mode", ie we may have DTS>CTS
 	//need to signal this for consumers using DTS (eg MPEG-2 TS)
 	if (flush_ref && ctx->pck_queue && ctx->poc_diff) {
+		u32 dts_inc=0;
+		s32 last_poc = 0;
+		Bool patch_missing_frame = GF_FALSE;
 		//send all reference packet queued
+		if (ctx->strict_poc==STRICT_POC_ERROR) {
+			u32 i;
+			u32 nb_bframes = 0;
+			for (i=0; i<gf_list_count(ctx->pck_queue); i++) {
+				s32 poc;
+				u64 poc_ts, dts;
+				GF_FilterPacket *q_pck = gf_list_get(ctx->pck_queue, i);
+
+				if (q_pck == ctx->first_pck_in_au) break;
+
+				dts = gf_filter_pck_get_dts(q_pck);
+				if (dts == GF_FILTER_NO_TS) continue;
+				poc_ts = gf_filter_pck_get_cts(q_pck);
+				assert(poc_ts != GF_FILTER_NO_TS);
+				poc = (s32) ((s64) poc_ts - CTS_POC_OFFSET_SAFETY);
+
+				if (i) {
+					if (last_poc>poc) nb_bframes ++;
+					else if (last_poc + ctx->poc_diff<poc)
+						patch_missing_frame = GF_TRUE;
+				}
+				last_poc = poc;
+			}
+			if (nb_bframes>1)
+				patch_missing_frame = GF_FALSE;
+			else if (nb_bframes)
+				patch_missing_frame = GF_TRUE;
+		}
+		last_poc = GF_INT_MIN;
 
 		while (gf_list_count(ctx->pck_queue) ) {
 			u64 dts;
@@ -521,9 +771,30 @@ static void naludmx_enqueue_or_dispatch(GF_NALUDmxCtx *ctx, GF_FilterPacket *n_p
 				}
 				gf_filter_pck_set_carousel_version(q_pck, 0);
 
+
 				poc_ts = gf_filter_pck_get_cts(q_pck);
 				assert(poc_ts != GF_FILTER_NO_TS);
 				poc = (s32) ((s64) poc_ts - CTS_POC_OFFSET_SAFETY);
+
+				if (patch_missing_frame) {
+					if (last_poc!=GF_INT_MIN) {
+						//check if we missed an IDR (poc reset)
+						if (poc && (last_poc > poc) ) {
+							last_poc = 0;
+							dts_inc += ctx->cur_fps.den;
+							ctx->dts_last_IDR = dts;
+							ctx->dts += ctx->cur_fps.den;
+						}
+						//check if we miss a frame
+						while (last_poc + ctx->poc_diff < poc) {
+							last_poc += ctx->poc_diff;
+							dts_inc += ctx->cur_fps.den;
+							ctx->dts += ctx->cur_fps.den;
+						}
+					}
+					last_poc = poc;
+					dts += dts_inc;
+				}
 				//poc is stored as diff since last IDR which has min_poc
 				cts = ( (ctx->min_poc + (s32) poc) * ctx->cur_fps.den ) / ctx->poc_diff + ctx->dts_last_IDR;
 
@@ -537,9 +808,9 @@ static void naludmx_enqueue_or_dispatch(GF_NALUDmxCtx *ctx, GF_FilterPacket *n_p
 				}
 
 				gf_filter_pck_set_cts(q_pck, cts);
-				GF_LOG(GF_LOG_DEBUG, GF_LOG_PARSER, ("[%s] Frame timestamps computed dts "LLU" cts "LLU" (poc %d min poc %d poc_diff %d last IDR DTS "LLU")\n", ctx->log_name, dts, cts, poc, ctx->min_poc, ctx->poc_diff, ctx->dts_last_IDR));
+				GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[%s] Frame timestamps computed dts "LLU" cts "LLU" (poc %d min poc %d poc_diff %d last IDR DTS "LLU")\n", ctx->log_name, dts, cts, poc, ctx->min_poc, ctx->poc_diff, ctx->dts_last_IDR));
 
-				if (ctx->importer) {
+				if (ctx->importer && ctx->cur_fps.den) {
 					poc = (s32) ( (s64) cts - (s64) dts);
 					if (poc<0) poc = -poc;
 					poc /= ctx->cur_fps.den;
@@ -557,27 +828,29 @@ static void naludmx_enqueue_or_dispatch(GF_NALUDmxCtx *ctx, GF_FilterPacket *n_p
 	gf_list_add(ctx->pck_queue, n_pck);
 }
 
-static void naludmx_hevc_add_param(GF_HEVCConfig *cfg, GF_AVCConfigSlot *sl, u8 nal_type)
+static void naludmx_add_param_nalu(GF_List *param_list, GF_NALUFFParam *sl, u8 nal_type)
 {
-	GF_HEVCParamArray *pa = NULL;
+	GF_NALUFFParamArray *pa = NULL;
 	u32 i, count;
-	count = gf_list_count(cfg->param_array);
+	count = gf_list_count(param_list);
 	for (i=0; i<count; i++) {
-		pa = gf_list_get(cfg->param_array, i);
+		pa = gf_list_get(param_list, i);
 		if (pa->type == nal_type) break;
 		pa = NULL;
 	}
 	if (!pa) {
-		GF_SAFEALLOC(pa, GF_HEVCParamArray);
+		GF_SAFEALLOC(pa, GF_NALUFFParamArray);
 		if (!pa) return;
 
 		pa->array_completeness = 1;
 		pa->type = nal_type;
 		pa->nalus = gf_list_new();
-		gf_list_add(cfg->param_array, pa);
+		gf_list_add(param_list, pa);
 	}
 	gf_list_add(pa->nalus, sl);
 }
+
+#ifndef GPAC_DISABLE_HEVC
 
 static void naludmx_hevc_set_parall_type(GF_NALUDmxCtx *ctx, GF_HEVCConfig *hevc_cfg)
 {
@@ -594,8 +867,8 @@ static void naludmx_hevc_set_parall_type(GF_NALUDmxCtx *ctx, GF_HEVCConfig *hevc
 	nb_pps = 0;
 
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *slc = (GF_AVCConfigSlot*)gf_list_get(ctx->pps, i);
-		s32 idx = gf_media_hevc_read_pps(slc->data, slc->size, &hevc);
+		GF_NALUFFParam *slc = (GF_NALUFFParam*)gf_list_get(ctx->pps, i);
+		s32 idx = gf_hevc_read_pps(slc->data, slc->size, &hevc);
 
 		if (idx>=0) {
 			HEVC_PPS *pps;
@@ -612,6 +885,7 @@ static void naludmx_hevc_set_parall_type(GF_NALUDmxCtx *ctx, GF_HEVCConfig *hevc
 	else if (!use_tiles && (use_wpp==nb_pps) ) hevc_cfg->parallelismType = 3;
 	else hevc_cfg->parallelismType = 0;
 }
+#endif // GPAC_DISABLE_HEVC
 
 GF_Err naludmx_set_hevc_oinf(GF_NALUDmxCtx *ctx, u8 *max_temporal_id)
 {
@@ -621,11 +895,11 @@ GF_Err naludmx_set_hevc_oinf(GF_NALUDmxCtx *ctx, u8 *max_temporal_id)
 	u32 data_size;
 	u32 i;
 	HEVC_VPS *vps;
-	GF_AVCConfigSlot *vps_sl = gf_list_get(ctx->vps, 0);
+	GF_NALUFFParam *vps_sl = gf_list_get(ctx->vps, 0);
 	if (!vps_sl) return GF_SERVICE_ERROR;
 
 	vps = &ctx->hevc_state->vps[vps_sl->id];
-	
+
 	if (!vps->vps_extension_found) return GF_OK;
 	if (vps->max_layers<2) return GF_OK;
 
@@ -767,7 +1041,7 @@ static void naludmx_set_hevc_linf(GF_NALUDmxCtx *ctx)
 		return;
 
 	bs = gf_bs_new(NULL, 0, GF_BITSTREAM_WRITE);
-	
+
 	gf_bs_write_int(bs, 0, 2);
 	gf_bs_write_int(bs, nb_layers, 6);
 	for (i=0; i<nb_layers; i++) {
@@ -787,6 +1061,7 @@ static void naludmx_set_hevc_linf(GF_NALUDmxCtx *ctx)
 
 static void naludmx_create_hevc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_size, u8 **dsi_enh, u32 *dsi_enh_size, u32 *max_width, u32 *max_height, u32 *max_enh_width, u32 *max_enh_height, GF_Fraction *sar, Bool *has_hevc_base)
 {
+#ifndef GPAC_DISABLE_HEVC
 	u32 i, count;
 	u8 layer_id;
 	Bool first = GF_TRUE;
@@ -811,7 +1086,7 @@ static void naludmx_create_hevc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32
 	//check we have one pps or sps in base layer
 	count = gf_list_count(ctx->sps);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->sps, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->sps, i);
 		layer_id = ((sl->data[0] & 0x1) << 5) | (sl->data[1] >> 3);
 		if (!layer_id) {
 			*has_hevc_base = GF_TRUE;
@@ -820,7 +1095,7 @@ static void naludmx_create_hevc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32
 	}
 	count = gf_list_count(ctx->pps);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->pps, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->pps, i);
 		layer_id = ((sl->data[0] & 0x1) << 5) | (sl->data[1] >> 3);
 		if (!layer_id) {
 			*has_hevc_base = GF_TRUE;
@@ -830,24 +1105,24 @@ static void naludmx_create_hevc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32
 	//assign vps first so that they are serialized first
 	count = gf_list_count(ctx->vps);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->vps, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->vps, i);
 		HEVC_VPS *vps = &ctx->hevc_state->vps[sl->id];
 
 		if (!i) {
 			hvcc->avgFrameRate = lvcc->avgFrameRate = vps->rates[0].avg_pic_rate;
-			hvcc->constantFrameRate = lvcc->constantFrameRate = vps->rates[0].constand_pic_rate_idc;
+			hvcc->constantFrameRate = lvcc->constantFrameRate = vps->rates[0].constant_pic_rate_idc;
 			hvcc->numTemporalLayers = lvcc->numTemporalLayers = vps->max_sub_layers;
 			hvcc->temporalIdNested = lvcc->temporalIdNested = vps->temporal_id_nesting;
 		}
 		//TODO set scalability mask
 		if (!ctx->analyze)
-			naludmx_hevc_add_param((ctx->explicit || ! (*has_hevc_base) ) ? lvcc : hvcc, sl, GF_HEVC_NALU_VID_PARAM);
+			naludmx_add_param_nalu((ctx->explicit || ! (*has_hevc_base) ) ? lvcc->param_array : hvcc->param_array, sl, GF_HEVC_NALU_VID_PARAM);
 	}
 
 	count = gf_list_count(ctx->sps);
 	for (i=0; i<count; i++) {
 		Bool is_lhvc = GF_FALSE;
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->sps, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->sps, i);
 		HEVC_SPS *sps = &ctx->hevc_state->sps[sl->id];
 		layer_id = ((sl->data[0] & 0x1) << 5) | (sl->data[1] >> 3);
 		if (!layer_id) *has_hevc_base = GF_TRUE;
@@ -882,7 +1157,7 @@ static void naludmx_create_hevc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32
 			}
 
 			/*disable frame rate scan, most bitstreams have wrong values there*/
-			if (!ctx->timescale && first && (!ctx->fps.num || !ctx->fps.den) && sps->has_timing_info
+			if (ctx->notime && first && (!ctx->fps.num || !ctx->fps.den) && sps->has_timing_info
 				/*if detected FPS is greater than 1000, assume wrong timing info*/
 				&& (sps->time_scale <= 1000*sps->num_units_in_tick)
 			) {
@@ -904,17 +1179,17 @@ static void naludmx_create_hevc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32
 			if (sps->height > max_h) max_h = sps->height;
 		}
 		if (!ctx->analyze)
-			naludmx_hevc_add_param(cfg, sl, GF_HEVC_NALU_SEQ_PARAM);
+			naludmx_add_param_nalu(cfg->param_array, sl, GF_HEVC_NALU_SEQ_PARAM);
 	}
 
 	cfg = ctx->explicit ? lvcc : hvcc;
 	count = gf_list_count(ctx->pps);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->pps, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->pps, i);
 		layer_id = ((sl->data[0] & 0x1) << 5) | (sl->data[1] >> 3);
 		if (!layer_id) *has_hevc_base = GF_TRUE;
 		if (!ctx->analyze)
-			naludmx_hevc_add_param(layer_id ? lvcc : cfg, sl, GF_HEVC_NALU_PIC_PARAM);
+			naludmx_add_param_nalu(layer_id ? lvcc->param_array : cfg->param_array, sl, GF_HEVC_NALU_PIC_PARAM);
 	}
 
 	*dsi = *dsi_enh = NULL;
@@ -939,16 +1214,190 @@ static void naludmx_create_hevc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32
 	}
 	count = gf_list_count(hvcc->param_array);
 	for (i=0; i<count; i++) {
-		GF_HEVCParamArray *pa = gf_list_get(hvcc->param_array, i);
+		GF_NALUFFParamArray *pa = gf_list_get(hvcc->param_array, i);
 		gf_list_reset(pa->nalus);
 	}
 	count = gf_list_count(lvcc->param_array);
 	for (i=0; i<count; i++) {
-		GF_HEVCParamArray *pa = gf_list_get(lvcc->param_array, i);
+		GF_NALUFFParamArray *pa = gf_list_get(lvcc->param_array, i);
 		gf_list_reset(pa->nalus);
 	}
 	gf_odf_hevc_cfg_del(hvcc);
 	gf_odf_hevc_cfg_del(lvcc);
+#endif // GPAC_DISABLE_HEVC
+}
+
+
+static void naludmx_create_vvc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_size, u8 **dsi_enh, u32 *dsi_enh_size, u32 *max_width, u32 *max_height, u32 *max_enh_width, u32 *max_enh_height, GF_Fraction *sar, Bool *has_vvc_base)
+{
+	u32 i, count;
+	u8 layer_id;
+	Bool first = GF_TRUE;
+	Bool first_lvvc = GF_TRUE;
+	GF_VVCConfig *cfg;
+	u32 max_w, max_h, max_ew, max_eh;
+
+	*has_vvc_base = GF_FALSE;
+
+	max_w = max_h = 0;
+	max_ew = max_eh = 0;
+	sar->num = sar->den = 0;
+
+	cfg = gf_odf_vvc_cfg_new();
+	cfg->nal_unit_size = ctx->nal_length;
+
+	//check we have one pps or sps in base layer
+	count = gf_list_count(ctx->sps);
+	for (i=0; i<count; i++) {
+		GF_NALUFFParam *sl = gf_list_get(ctx->sps, i);
+		layer_id = (sl->data[0] & 0x3f);
+		//todo, base is not always 0 !
+		if (!layer_id) {
+			*has_vvc_base = GF_TRUE;
+			break;
+		}
+	}
+	count = gf_list_count(ctx->pps);
+	for (i=0; i<count; i++) {
+		GF_NALUFFParam *sl = gf_list_get(ctx->pps, i);
+		layer_id = (sl->data[0] & 0x3f);
+		//todo, base is not always 0 !
+		if (!layer_id) {
+			*has_vvc_base = GF_TRUE;
+			break;
+		}
+	}
+	//assign vps first so that they are serialized first
+	count = gf_list_count(ctx->vps);
+	for (i=0; i<count; i++) {
+		GF_NALUFFParam *sl = gf_list_get(ctx->vps, i);
+		VVC_VPS *vps = &ctx->vvc_state->vps[sl->id];
+
+		if (!i) {
+			cfg->avgFrameRate = vps->rates[0].avg_pic_rate;
+			cfg->constantFrameRate = vps->rates[0].constant_pic_rate_idc;
+			cfg->numTemporalLayers = vps->max_sub_layers;
+		}
+		if (!ctx->analyze)
+			naludmx_add_param_nalu(cfg->param_array, sl, GF_VVC_NALU_VID_PARAM);
+	}
+
+	count = gf_list_count(ctx->sps);
+	for (i=0; i<count; i++) {
+		Bool is_lvvc = GF_FALSE;
+		GF_NALUFFParam *sl = gf_list_get(ctx->sps, i);
+		VVC_SPS *sps = &ctx->vvc_state->sps[sl->id];
+		layer_id = sl->data[0] & 0x3f;
+		if (!layer_id) *has_vvc_base = GF_TRUE;
+
+		if (ctx->explicit || layer_id) {
+			is_lvvc = GF_TRUE;
+		}
+
+		if (first || (is_lvvc && first_lvvc) ) {
+			VVC_VPS *vps = &ctx->vvc_state->vps[sps->vps_id];
+			cfg->avgFrameRate = 0;
+			cfg->constantFrameRate = 1;
+			cfg->numTemporalLayers = sps->max_sublayers;
+			cfg->nal_unit_size = ctx->nal_length;
+			cfg->ptl_present = vps->num_ptl ? 1 : 0;
+
+			if (vps->num_ptl) {
+				cfg->num_constraint_info = vps->ptl[0].gci_present ? 1 : 12;
+				cfg->general_profile_idc = vps->ptl[0].general_profile_idc;
+				cfg->general_tier_flag = vps->ptl[0].general_tier_flag;
+				cfg->general_level_idc = vps->ptl[0].general_level_idc;
+				cfg->ptl_frame_only_constraint = vps->ptl[0].frame_only_constraint;
+				cfg->ptl_multilayer_enabled = vps->ptl[0].multilayer_enabled;
+
+				cfg->general_constraint_info = gf_malloc(sizeof(u8) * cfg-> num_constraint_info);
+				if (cfg->general_constraint_info)
+					memcpy(cfg->general_constraint_info, vps->ptl[0].gci, cfg->num_constraint_info);
+
+				//todo set temporal sublayers
+				cfg->ptl_sublayer_present_mask = 0;
+				cfg->num_sub_profiles = 0;
+				cfg->ols_idx = 0;
+			}
+			cfg->chroma_format = sps->chroma_format_idc;
+			cfg->bit_depth = sps->bitdepth;
+			cfg->maxPictureWidth = sps->width;
+			cfg->maxPictureHeight = sps->height;
+
+			if (sps->aspect_ratio_info_present_flag && sps->sar_width && sps->sar_height) {
+				sar->num = sps->sar_width;
+				sar->den = sps->sar_height;
+			}
+
+			/*disable frame rate scan, most bitstreams have wrong values there*/
+			if (ctx->notime && first && (!ctx->fps.num || !ctx->fps.den) && sps->has_timing_info
+				/*if detected FPS is greater than 1000, assume wrong timing info*/
+				&& (sps->time_scale <= 1000*sps->num_units_in_tick)
+			) {
+				ctx->cur_fps.num = sps->time_scale;
+				ctx->cur_fps.den = sps->num_units_in_tick;
+				gf_media_get_reduced_frame_rate(&ctx->cur_fps.num, &ctx->cur_fps.den);
+
+				if (!ctx->fps.num && ctx->dts==ctx->fps.den)
+					ctx->dts = ctx->cur_fps.den;
+			}
+			ctx->fps = ctx->cur_fps;
+		}
+		first = GF_FALSE;
+		if (is_lvvc) {
+			first_lvvc = GF_FALSE;
+			if (sps->width > max_ew) max_ew = sps->width;
+			if (sps->height > max_eh) max_eh = sps->height;
+		} else {
+			if (sps->width > max_w) max_w = sps->width;
+			if (sps->height > max_h) max_h = sps->height;
+		}
+		if (!ctx->analyze)
+			naludmx_add_param_nalu(cfg->param_array, sl, GF_VVC_NALU_SEQ_PARAM);
+	}
+
+	count = gf_list_count(ctx->pps);
+	for (i=0; i<count; i++) {
+		GF_NALUFFParam *sl = gf_list_get(ctx->pps, i);
+		layer_id = sl->data[0] & 0x3F;
+		if (!layer_id) *has_vvc_base = GF_TRUE;
+		if (!ctx->analyze)
+			naludmx_add_param_nalu(cfg->param_array, sl, GF_VVC_NALU_PIC_PARAM);
+	}
+
+	count = gf_list_count(ctx->vvc_dci);
+	for (i=0; i<count; i++) {
+		GF_NALUFFParam *sl = gf_list_get(ctx->vvc_dci, i);
+		layer_id = sl->data[0] & 0x3F;
+		if (!layer_id) *has_vvc_base = GF_TRUE;
+		if (!ctx->analyze)
+			naludmx_add_param_nalu(cfg->param_array, sl, GF_VVC_NALU_DEC_PARAM);
+	}
+
+	count = gf_list_count(ctx->vvc_aps_pre);
+	for (i=0; i<count; i++) {
+		GF_NALUFFParam *sl = gf_list_get(ctx->vvc_aps_pre, i);
+		layer_id = sl->data[0] & 0x3F;
+		if (!layer_id) *has_vvc_base = GF_TRUE;
+		if (!ctx->analyze)
+			naludmx_add_param_nalu(cfg->param_array, sl, GF_VVC_NALU_APS_PREFIX);
+	}
+
+	*dsi = *dsi_enh = NULL;
+	*dsi_size = *dsi_enh_size = 0;
+
+	gf_odf_vvc_cfg_write(cfg, dsi, dsi_size);
+	*max_width = max_w;
+	*max_height = max_h;
+	*max_enh_width = max_ew;
+	*max_enh_height = max_eh;
+
+	count = gf_list_count(cfg->param_array);
+	for (i=0; i<count; i++) {
+		GF_NALUFFParamArray *pa = gf_list_get(cfg->param_array, i);
+		gf_list_reset(pa->nalus);
+	}
+	gf_odf_vvc_cfg_del(cfg);
 }
 
 void naludmx_create_avc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_size, u8 **dsi_enh, u32 *dsi_enh_size, u32 *max_width, u32 *max_height, u32 *max_enh_width, u32 *max_enh_height, GF_Fraction *sar)
@@ -974,7 +1423,7 @@ void naludmx_create_avc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_si
 	count = gf_list_count(ctx->sps);
 	for (i=0; i<count; i++) {
 		Bool is_svc = GF_FALSE;
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->sps, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->sps, i);
 		AVC_SPS *sps = &ctx->avc_state->sps[sl->id];
 		u32 nal_type = sl->data[0] & 0x1F;
 
@@ -1000,7 +1449,7 @@ void naludmx_create_avc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_si
 			cfg->luma_bit_depth = 8 + sps->luma_bit_depth_m8;
 			cfg->chroma_bit_depth = 8 + sps->chroma_bit_depth_m8;
 			/*try to patch ?*/
-			if (!gf_avc_is_rext_profile(cfg->AVCProfileIndication)
+			if (!gf_avcc_use_extensions(cfg->AVCProfileIndication)
 				&& ((cfg->chroma_format>1) || (cfg->luma_bit_depth>8) || (cfg->chroma_bit_depth>8))
 			) {
 				if ((cfg->luma_bit_depth>8) || (cfg->chroma_bit_depth>8)) {
@@ -1034,15 +1483,15 @@ void naludmx_create_avc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_si
 					else
 						DeltaTfiDivisorIdx = (ctx->avc_state->sei.pic_timing.pic_struct+1) / 2;
 				}
-				if (!ctx->timescale) {
+				if (ctx->notime && sps->vui.time_scale && sps->vui.num_units_in_tick) {
 					ctx->cur_fps.num = 2 * sps->vui.time_scale;
-					ctx->cur_fps.den =  2 * sps->vui.num_units_in_tick * DeltaTfiDivisorIdx;
+					ctx->cur_fps.den = 2 * sps->vui.num_units_in_tick * DeltaTfiDivisorIdx;
 
 					if (!ctx->fps.num && ctx->dts==ctx->fps.den)
 						ctx->dts = ctx->cur_fps.den;
 				}
 				if (! sps->vui.fixed_frame_rate_flag)
-					GF_LOG(GF_LOG_INFO, GF_LOG_PARSER, ("[%s] Possible Variable Frame Rate: VUI \"fixed_frame_rate_flag\" absent\n", ctx->log_name));
+					GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("[%s] Possible Variable Frame Rate: VUI \"fixed_frame_rate_flag\" absent\n", ctx->log_name));
 			}
 			ctx->fps = ctx->cur_fps;
 		}
@@ -1062,7 +1511,7 @@ void naludmx_create_avc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_si
 	cfg = ctx->explicit ? svcc : avcc;
 	count = gf_list_count(ctx->sps_ext);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->sps_ext, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->sps_ext, i);
 		if (!cfg->sequenceParameterSetExtensions) cfg->sequenceParameterSetExtensions = gf_list_new();
 		if (!ctx->analyze)
 			gf_list_add(cfg->sequenceParameterSetExtensions, sl);
@@ -1071,7 +1520,7 @@ void naludmx_create_avc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_si
 	cfg = ctx->explicit ? svcc : avcc;
 	count = gf_list_count(ctx->pps);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->pps, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->pps, i);
 		if (!ctx->analyze)
 			gf_list_add(cfg->pictureParameterSets, sl);
 	}
@@ -1079,7 +1528,7 @@ void naludmx_create_avc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_si
 	cfg = svcc;
 	count = gf_list_count(ctx->pps_svc);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(ctx->pps_svc, i);
+		GF_NALUFFParam *sl = gf_list_get(ctx->pps_svc, i);
 		if (!ctx->analyze)
 			gf_list_add(cfg->pictureParameterSets, sl);
 	}
@@ -1109,7 +1558,88 @@ void naludmx_create_avc_decoder_config(GF_NALUDmxCtx *ctx, u8 **dsi, u32 *dsi_si
 	*max_enh_height = max_eh;
 }
 
-static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx)
+static void naludmx_end_access_unit(GF_NALUDmxCtx *ctx)
+{
+	//finalize current fram flags - we will flush(send) later on
+	naludmx_finalize_au_flags(ctx);
+
+	ctx->has_islice = GF_FALSE;
+	ctx->first_slice_in_au = GF_TRUE;
+	ctx->sei_recovery_frame_count = -1;
+	ctx->au_sap = GF_FILTER_SAP_NONE;
+	ctx->au_sap2_poc_reset = GF_FALSE;
+	ctx->bottom_field_flag = GF_FALSE;
+}
+
+static void naludmx_update_clli_mdcv(GF_NALUDmxCtx *ctx, Bool reset_crc)
+{
+	if (!ctx->opid) return;
+
+	if (reset_crc)
+		ctx->clli_crc = 0;
+	if ((ctx->hevc_state && ctx->hevc_state->clli_valid)
+		|| (ctx->vvc_state && ctx->vvc_state->clli_valid)
+	) {
+		u8 *clli = ctx->hevc_state ? ctx->hevc_state->clli_data : ctx->vvc_state->clli_data;
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CONTENT_LIGHT_LEVEL, &PROP_DATA(clli, 4));
+		ctx->clli_crc = gf_crc_32(clli, 4);
+	}
+	if (reset_crc)
+		ctx->mdcv_crc = 0;
+
+	if ((ctx->hevc_state && ctx->hevc_state->mdcv_valid)
+		|| (ctx->vvc_state && ctx->vvc_state->mdcv_valid)
+	) {
+		u8 *mdcv = ctx->hevc_state ? ctx->hevc_state->mdcv_data : ctx->vvc_state->mdcv_data;
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_MASTER_DISPLAY_COLOUR, &PROP_DATA(mdcv, 24));
+		ctx->mdcv_crc = gf_crc_32(mdcv, 24);
+	}
+}
+
+static void naludmx_set_dolby_vision(GF_NALUDmxCtx *ctx)
+{
+	u8 dv_cfg[24];
+
+	switch (ctx->dv_mode) {
+	case DVMODE_NONE:
+	case DVMODE_CLEAN:
+		return;
+	//auto mode, wait until we have RPU or EL to signal profile
+	case DVMODE_AUTO:
+		if (!ctx->nb_dv_rpu && !ctx->nb_dv_el) return;
+		break;
+	}
+
+	u32 dv_level = gf_dolby_vision_level(ctx->width, ctx->height, ctx->cur_fps.num, ctx->cur_fps.den, ctx->codecid);
+
+	if (ctx->dv_profile==8) {
+		if (!ctx->dv_compatid) {
+			GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] DV profile 8 used but dv_compatid not set, defaulting to bt709 (=2)\n", ctx->log_name));
+			ctx->dv_compatid = 2;
+		}
+	}
+
+	memset(dv_cfg, 0, sizeof(u8)*24);
+	GF_BitStream *bs = gf_bs_new(dv_cfg, 24, GF_BITSTREAM_WRITE);
+	gf_bs_write_u8(bs, 1); //version major
+	gf_bs_write_u8(bs, 0); //version minor
+	gf_bs_write_int(bs, ctx->dv_profile, 7);
+	gf_bs_write_int(bs, dv_level, 6);
+	gf_bs_write_int(bs, ctx->nb_dv_rpu ? 1 : 0, 1); //rpu present
+	gf_bs_write_int(bs, ctx->nb_dv_el ? 1 : 0, 1); //el present
+	gf_bs_write_int(bs, 1, 1); //bl_present_flag always true, we don't split streams
+	gf_bs_write_int(bs, ctx->dv_compatid, 4);
+	//the rest is zero-reserved
+	gf_bs_write_int(bs, 0, 28);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_del(bs);
+	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DOLBY_VISION, &PROP_DATA(dv_cfg, 24));
+}
+
+static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx, Bool force_au_flush)
 {
 	u32 w, h, ew, eh;
 	u8 *dsi, *dsi_enh;
@@ -1123,12 +1653,14 @@ static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 		if (ctx->opid && !ctx->ps_modified) return;
 	} else {
 		if (!ctx->ps_modified) return;
+		if (ctx->opid && (!gf_list_count(ctx->sps) || !gf_list_count(ctx->pps)))
+			return;
 	}
 	ctx->ps_modified = GF_FALSE;
 
 	dsi = dsi_enh = NULL;
 
-	if (!ctx->timescale) {
+	if (ctx->notime) {
 		ctx->cur_fps = ctx->fps;
 		if (!ctx->cur_fps.num || !ctx->cur_fps.den) {
 			ctx->cur_fps.num = 25000;
@@ -1136,14 +1668,22 @@ static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 		}
 	}
 
-	if (ctx->is_hevc) {
+	if (ctx->codecid==GF_CODECID_HEVC) {
 		naludmx_create_hevc_decoder_config(ctx, &dsi, &dsi_size, &dsi_enh, &dsi_enh_size, &w, &h, &ew, &eh, &sar, &has_hevc_base);
+	} else if (ctx->codecid==GF_CODECID_VVC) {
+		naludmx_create_vvc_decoder_config(ctx, &dsi, &dsi_size, &dsi_enh, &dsi_enh_size, &w, &h, &ew, &eh, &sar, &has_hevc_base);
 	} else {
 		naludmx_create_avc_decoder_config(ctx, &dsi, &dsi_size, &dsi_enh, &dsi_enh_size, &w, &h, &ew, &eh, &sar);
 	}
 	crc_cfg = crc_cfg_enh = 0;
 	if (dsi) crc_cfg = gf_crc_32(dsi, dsi_size);
 	if (dsi_enh) crc_cfg_enh = gf_crc_32(dsi_enh, dsi_enh_size);
+
+	if (!ctx->analyze && (!w || !h)) {
+		if (dsi) gf_free(dsi);
+		if (dsi_enh) gf_free(dsi_enh);
+		return;
+	}
 
 	if (!ctx->opid) {
 		ctx->opid = gf_filter_pid_new(filter);
@@ -1161,14 +1701,21 @@ static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 		return;
 	}
 
+	if (force_au_flush) {
+		naludmx_end_access_unit(ctx);
+	}
+	
 	naludmx_enqueue_or_dispatch(ctx, NULL, GF_TRUE);
-	if (!ctx->analyze && gf_list_count(ctx->pck_queue)) {
-		GF_LOG(dsi_enh ? GF_LOG_DEBUG : GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] xPS changed but could not flush frames before signaling state change %s\n", ctx->log_name, dsi_enh ? "- likely scalable xPS update" : "!"));
+	if (!ctx->analyze && (gf_list_count(ctx->pck_queue)>1))  {
+		GF_LOG(dsi_enh ? GF_LOG_DEBUG : GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] xPS changed but could not flush frames before signaling state change %s\n", ctx->log_name, dsi_enh ? "- likely scalable xPS update" : "!"));
 	}
 
 	//copy properties at init or reconfig
 	gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
-	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, & PROP_UINT(GF_STREAM_VISUAL));
+
+	//don't change codec type if reframing an ES (for HLS SAES)
+	if (!ctx->timescale)
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, & PROP_UINT(GF_STREAM_VISUAL));
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, NULL);
 	if (!gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_ID))
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_ID, &PROP_UINT(1));
@@ -1194,18 +1741,24 @@ static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_TIMESCALE, & PROP_UINT(ctx->timescale ? ctx->timescale : ctx->cur_fps.num));
 
 	if (ctx->explicit || !has_hevc_base) {
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT(ctx->is_hevc ? GF_CODECID_LHVC : GF_CODECID_SVC));
+		u32 enh_cid = GF_CODECID_SVC;
+		if (ctx->codecid==GF_CODECID_HEVC) enh_cid = GF_CODECID_LHVC;
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT(enh_cid));
 		if (dsi) gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DECODER_CONFIG, &PROP_DATA_NO_COPY(dsi, dsi_size) );
 	} else {
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT(ctx->is_hevc ? GF_CODECID_HEVC : GF_CODECID_AVC));
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT(ctx->codecid));
 		if (dsi) gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DECODER_CONFIG, &PROP_DATA_NO_COPY(dsi, dsi_size) );
 		if (dsi_enh) gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DECODER_CONFIG_ENHANCEMENT, &PROP_DATA_NO_COPY(dsi_enh, dsi_enh_size) );
 	}
 
-	if (ctx->is_hevc && gf_list_count(ctx->vps) ) {
+	if (ctx->bitrate) {
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_BITRATE, & PROP_UINT(ctx->bitrate));
+	}
+
+	if ((ctx->codecid==GF_CODECID_HEVC) && gf_list_count(ctx->vps) ) {
 		GF_Err e = naludmx_set_hevc_oinf(ctx, NULL);
 		if (e) {
-			GF_LOG(GF_LOG_WARNING, GF_LOG_PARSER, ("[%s] Failed to create OINF chunk\n", ctx->log_name));
+			GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] Failed to create OINF chunk\n", ctx->log_name));
 		}
 		naludmx_set_hevc_linf(ctx);
 	}
@@ -1218,7 +1771,7 @@ static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 	//set interlaced or remove interlaced property
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_INTERLACED, ctx->interlaced ? & PROP_UINT(GF_TRUE) : NULL);
 
-	if (ctx->is_hevc) {
+	if (ctx->codecid==GF_CODECID_HEVC) {
 		HEVC_SPS *sps = &ctx->hevc_state->sps[ctx->hevc_state->sps_active_idx];
 		if (sps->colour_description_present_flag) {
 			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_PRIMARIES, & PROP_UINT(sps->colour_primaries) );
@@ -1227,6 +1780,7 @@ static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_RANGE, & PROP_BOOL(sps->video_full_range_flag) );
 			has_colr_info = GF_TRUE;
 		}
+	} else if (ctx->codecid==GF_CODECID_VVC) {
 	} else {
 		/*use the last active SPS*/
 		if (ctx->avc_state->sps[ctx->avc_state->sps_active_idx].vui_parameters_present_flag
@@ -1247,6 +1801,11 @@ static void naludmx_check_pid(GF_Filter *filter, GF_NALUDmxCtx *ctx)
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_MX, NULL);
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_RANGE, NULL);
 	}
+
+	naludmx_update_clli_mdcv(ctx, GF_TRUE);
+
+	naludmx_set_dolby_vision(ctx);
+
 }
 
 static Bool naludmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
@@ -1261,7 +1820,6 @@ static Bool naludmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 		if (!ctx->is_playing) {
 			ctx->is_playing = GF_TRUE;
 			ctx->cts = ctx->dts = 0;
-			ctx->bytes_in_header = 0;
 		}
 		if (! ctx->is_file) {
 			if (!ctx->initial_play_done) {
@@ -1270,24 +1828,28 @@ static Bool naludmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 					return GF_FALSE;
 			}
 			ctx->resume_from = 0;
+			ctx->nal_store_size = 0;
 			return GF_FALSE;
 		}
 		if (ctx->start_range && (ctx->index<0)) {
 			ctx->index = -ctx->index;
 			ctx->file_loaded = GF_FALSE;
 			ctx->duration.den = ctx->duration.num = 0;
-			GF_LOG(GF_LOG_INFO, GF_LOG_PARSER, ("[%s] Play request from %d, building index\n", ctx->log_name, ctx->start_range));
+			GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("[%s] Play request from %d, building index\n", ctx->log_name, ctx->start_range));
 			naludmx_check_dur(filter, ctx);
 		}
 		ctx->start_range = evt->play.start_range;
 		ctx->in_seek = GF_TRUE;
 
 		if (ctx->start_range) {
-			ctx->nb_nalus = ctx->nb_i = ctx->nb_p = ctx->nb_b = ctx->nb_sp = ctx->nb_si = ctx->nb_sei = ctx->nb_idr = 0;
+			ctx->nb_nalus = ctx->nb_i = ctx->nb_p = ctx->nb_b = ctx->nb_sp = ctx->nb_si = ctx->nb_sei = ctx->nb_idr = ctx->nb_cra = 0;
 			for (i=1; i<ctx->index_size; i++) {
 				if (ctx->indexes[i].duration>ctx->start_range) {
-					ctx->cts = ctx->dts = (u64) (ctx->indexes[i-1].duration * ctx->cur_fps.num);
+					ctx->cts = (u64) (ctx->indexes[i-1].duration * ctx->cur_fps.num);
+					ctx->dts = ctx->dts_last_IDR = ctx->cts;
 					file_pos = ctx->indexes[i-1].pos;
+					ctx->seek_gdr_count = ctx->indexes[i-1].roll_count;
+					if (ctx->seek_gdr_count) ctx->first_gdr = GF_TRUE;
 					break;
 				}
 			}
@@ -1295,11 +1857,19 @@ static Bool naludmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 		if (!ctx->initial_play_done) {
 			ctx->initial_play_done = GF_TRUE;
 			//seek will not change the current source state, don't send a seek
-			if (!file_pos)
+			if (!file_pos) {
+				//very short streams, input is done before we get notified for play and everything stored in memory: flush
+				if (gf_filter_pid_is_eos(ctx->ipid) && (ctx->nal_store_size)) {
+					gf_filter_post_process_task(filter);
+				}
 				return GF_TRUE;
+			}
 		}
+		ctx->nb_frames = 0;
+		ctx->nb_nalus = 0;
 		ctx->resume_from = 0;
-		
+		ctx->nal_store_size = 0;
+
 		//post a seek
 		GF_FEVT_INIT(fevt, GF_FEVT_SOURCE_SEEK, ctx->ipid);
 		fevt.seek.start_offset = file_pos;
@@ -1311,6 +1881,9 @@ static Bool naludmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 	case GF_FEVT_STOP:
 		//don't cancel event
 		ctx->is_playing = GF_FALSE;
+		ctx->nal_store_size = 0;
+		ctx->resume_from = 0;
+		ctx->cts = 0;
 		return GF_FALSE;
 
 	case GF_FEVT_SET_SPEED:
@@ -1327,7 +1900,7 @@ static GFINLINE void naludmx_update_time(GF_NALUDmxCtx *ctx)
 {
 	assert(ctx->cur_fps.num);
 
-	if (ctx->timescale) {
+	if (!ctx->notime) {
 		//very first frame, no dts diff, assume 3000/90k. It should only hurt if we have several frames packet in the first packet sent
 		u64 dts_inc = ctx->cur_fps.den ? ctx->cur_fps.den : 3000;
 		ctx->cts += dts_inc;
@@ -1342,11 +1915,13 @@ static GFINLINE void naludmx_update_time(GF_NALUDmxCtx *ctx)
 static void naludmx_queue_param_set(GF_NALUDmxCtx *ctx, char *data, u32 size, u32 ps_type, s32 ps_id)
 {
 	GF_List *list = NULL, *alt_list = NULL;
-	GF_AVCConfigSlot *sl;
-	u32 i, count;
-	u32 crc = gf_crc_32(data, size);
+	GF_NALUFFParam *sl;
+	u32 i, count, crc;
 
-	if (ctx->is_hevc) {
+	if (!size) return;
+	crc = gf_crc_32(data, size);
+
+	if (ctx->codecid==GF_CODECID_HEVC) {
 		switch (ps_type) {
 		case GF_HEVC_NALU_VID_PARAM:
 			if (!ctx->vps) ctx->vps = gf_list_new();
@@ -1357,6 +1932,30 @@ static void naludmx_queue_param_set(GF_NALUDmxCtx *ctx, char *data, u32 size, u3
 			break;
 		case GF_HEVC_NALU_PIC_PARAM:
 			list = ctx->pps;
+			break;
+		default:
+			assert(0);
+			return;
+		}
+	} else if (ctx->codecid==GF_CODECID_VVC) {
+		switch (ps_type) {
+		case GF_VVC_NALU_VID_PARAM:
+			if (!ctx->vps) ctx->vps = gf_list_new();
+			list = ctx->vps;
+			break;
+		case GF_VVC_NALU_SEQ_PARAM:
+			list = ctx->sps;
+			break;
+		case GF_VVC_NALU_PIC_PARAM:
+			list = ctx->pps;
+			break;
+		case GF_VVC_NALU_DEC_PARAM:
+			if (!ctx->vvc_dci) ctx->vvc_dci = gf_list_new();
+			list = ctx->vvc_dci;
+			break;
+		case GF_VVC_NALU_APS_PREFIX:
+			if (!ctx->vvc_aps_pre) ctx->vvc_aps_pre = gf_list_new();
+			list = ctx->vvc_aps_pre;
 			break;
 		default:
 			assert(0);
@@ -1419,7 +2018,7 @@ static void naludmx_queue_param_set(GF_NALUDmxCtx *ctx, char *data, u32 size, u3
 	}
 	//TODO we might want to purge the list after a while !!
 
-	GF_SAFEALLOC(sl, GF_AVCConfigSlot);
+	GF_SAFEALLOC(sl, GF_NALUFFParam);
 	if (!sl) return;
 	sl->data = gf_malloc(sizeof(char) * size);
 	if (!sl->data) {
@@ -1435,7 +2034,7 @@ static void naludmx_queue_param_set(GF_NALUDmxCtx *ctx, char *data, u32 size, u3
 	gf_list_add(list, sl);
 }
 
-void naludmx_finalize_au_flags(GF_NALUDmxCtx *ctx)
+static void naludmx_finalize_au_flags(GF_NALUDmxCtx *ctx)
 {
 	u64 ts;
 	Bool is_rap = GF_FALSE;
@@ -1444,7 +2043,7 @@ void naludmx_finalize_au_flags(GF_NALUDmxCtx *ctx)
 		return;
 	if (ctx->au_sap) {
 		gf_filter_pck_set_sap(ctx->first_pck_in_au, ctx->au_sap);
-		if (ctx->au_sap == GF_FILTER_SAP_1) {
+		if ((ctx->au_sap == GF_FILTER_SAP_1) || ctx->au_sap2_poc_reset) {
 			ctx->dts_last_IDR = gf_filter_pck_get_dts(ctx->first_pck_in_au);
 			if (ctx->is_paff)
 				ctx->dts_last_IDR *= 2;
@@ -1457,7 +2056,7 @@ void naludmx_finalize_au_flags(GF_NALUDmxCtx *ctx)
 		gf_filter_pck_set_sap(ctx->first_pck_in_au, GF_FILTER_SAP_1);
 		if (!ctx->use_opengop_gdr) {
 			ctx->use_opengop_gdr = 1;
-			GF_LOG(GF_LOG_WARNING, GF_LOG_CODING, ("[%s] Forcing non-IDR samples with I slices to be marked as sync points - resulting file will not be ISOBMFF conformant\n", ctx->log_name));
+			GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] Forcing non-IDR samples with I slices to be marked as sync points - resulting file will not be ISOBMFF compliant\n", ctx->log_name));
 		}
 		is_rap = GF_TRUE;
 	}
@@ -1486,7 +2085,7 @@ void naludmx_finalize_au_flags(GF_NALUDmxCtx *ctx)
 		/*we store the POC (last POC minus the poc shift) as the CTS offset and re-update the CTS when dispatching*/
 		assert(ctx->last_poc >= ctx->poc_shift);
 		gf_filter_pck_set_cts(ctx->first_pck_in_au, CTS_POC_OFFSET_SAFETY + ctx->last_poc - ctx->poc_shift);
-		//we use the carrousel flag temporarly to indicate the cts must be recomputed
+		//we use the carousel flag temporarly to indicate the cts must be recomputed
 		gf_filter_pck_set_carousel_version(ctx->first_pck_in_au, 1);
 	}
 
@@ -1510,10 +2109,41 @@ void naludmx_finalize_au_flags(GF_NALUDmxCtx *ctx)
 	ctx->has_ref_slices = GF_FALSE;
 	ctx->has_redundant = GF_FALSE;
 
+	if ((ctx->hevc_state && ctx->hevc_state->clli_valid)
+		|| (ctx->vvc_state && ctx->vvc_state->clli_valid)
+	) {
+		u8 *clli = ctx->hevc_state ? ctx->hevc_state->clli_data : ctx->vvc_state->clli_data;
+		u32 crc = gf_crc_32(clli, 4);
+		if (!ctx->clli_crc) {
+			naludmx_update_clli_mdcv(ctx, GF_FALSE);
+		}
+
+		if (crc != ctx->clli_crc) {
+			gf_filter_pck_set_property(ctx->first_pck_in_au, GF_PROP_PID_CONTENT_LIGHT_LEVEL, &PROP_DATA(clli, 4));
+		}
+	}
+	if ((ctx->hevc_state && ctx->hevc_state->mdcv_valid)
+		|| (ctx->vvc_state && ctx->vvc_state->mdcv_valid)
+	) {
+		u8 *mdcv = ctx->hevc_state ? ctx->hevc_state->mdcv_data : ctx->vvc_state->mdcv_data;
+		u32 crc = gf_crc_32(mdcv, 24);
+		if (!ctx->mdcv_crc) {
+			naludmx_update_clli_mdcv(ctx, GF_FALSE);
+		}
+		if (crc != ctx->mdcv_crc) {
+			gf_filter_pck_set_property(ctx->first_pck_in_au, GF_PROP_PID_MASTER_DISPLAY_COLOUR, &PROP_DATA(mdcv, 24));
+		}
+	}
+	if (ctx->hevc_state)
+		ctx->hevc_state->clli_valid = ctx->hevc_state->mdcv_valid = 0;
+	if (ctx->vvc_state)
+		ctx->vvc_state->clli_valid = ctx->vvc_state->mdcv_valid = 0;
+
+
 	//if we reuse input packets timing, we can dispatch asap.
 	//otherwise if poc probe is done (we know the min_poc_diff between images) and we are not in strict mode, dispatch asap
 	//otherwise we will need to wait for the next ref frame to make sure we know all pocs ...
-	if (ctx->timescale || (!ctx->strict_poc && ctx->poc_probe_done) )
+	if (!ctx->notime || (!ctx->strict_poc && ctx->poc_probe_done) )
 		naludmx_enqueue_or_dispatch(ctx, NULL, GF_TRUE);
 
 	ctx->first_pck_in_au = NULL;
@@ -1524,47 +2154,16 @@ static void naludmx_update_nalu_maxsize(GF_NALUDmxCtx *ctx, u32 size)
 	if (ctx->max_nalu_size < size) {
 		ctx->max_nalu_size = size;
 		if (size > ctx->max_nalu_size_allowed) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] nal size %d larger than max allowed size %d - change import settings\n", ctx->log_name, size, ctx->max_nalu_size_allowed ));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] nal size %d larger than max allowed size %d - change import settings\n", ctx->log_name, size, ctx->max_nalu_size_allowed ));
 		}
 	}
 }
 
 
-GF_Err naludmx_realloc_last_pck(GF_NALUDmxCtx *ctx, u32 nb_bytes_to_add, u8 **data_ptr)
-{
-	GF_Err e;
-	u8 *pck_data;
-	u32 full_size;
-	GF_FilterPacket *pck = gf_list_last(ctx->pck_queue);
-	*data_ptr = NULL;
-	if (!pck) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] attempt to reallocate a non-existing packet!\n", ctx->log_name));
-		return GF_SERVICE_ERROR;
-	}
-	e = gf_filter_pck_expand(pck, nb_bytes_to_add, &pck_data, data_ptr, &full_size);
-	if (e) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Failed to reallocate packet buffer: %s\n", ctx->log_name, gf_error_to_string(e) ));
-		return e;
-	}
-	assert(ctx->bs_w);
-	//rewrite NALU size length
-	full_size -= ctx->nal_length;
-	gf_bs_reassign_buffer(ctx->bs_w, pck_data, ctx->nal_length);
-	gf_bs_write_int(ctx->bs_w, full_size, 8*ctx->nal_length);
-	naludmx_update_nalu_maxsize(ctx, full_size);
-	//rewrite subsample size
-	if (ctx->subsamples) {
-		assert(ctx->subsamp_buffer_size>=14);
-		//reassign to begining of size field (after first u32 flags)
-		gf_bs_reassign_buffer(ctx->bs_w, ctx->subsamp_buffer + ctx->subsamp_buffer_size-14 + 4, 14 - 4);
-		gf_bs_write_u32(ctx->bs_w, full_size + ctx->nal_length);
-	}
-	return GF_OK;
-}
-
 GF_FilterPacket *naludmx_start_nalu(GF_NALUDmxCtx *ctx, u32 nal_size, Bool skip_nal_field, Bool *au_start, u8 **pck_data)
 {
 	GF_FilterPacket *dst_pck = gf_filter_pck_new_alloc(ctx->opid, nal_size + (skip_nal_field ? 0 : ctx->nal_length), pck_data);
+	if (!dst_pck) return NULL;
 
 	if (!skip_nal_field) {
 		if (!ctx->bs_w) ctx->bs_w = gf_bs_new(*pck_data, ctx->nal_length, GF_BITSTREAM_WRITE);
@@ -1586,14 +2185,21 @@ GF_FilterPacket *naludmx_start_nalu(GF_NALUDmxCtx *ctx, u32 nal_size, Bool skip_
 			//we don't set the CTS, it will be set once we detect frame end
 			gf_filter_pck_set_dts(dst_pck, ctx->dts);
 		}
-		//we use the carrousel flag temporarly to indicate the cts must be recomputed
-		gf_filter_pck_set_carousel_version(dst_pck, ctx->timescale ? 0 : 1);
+		//we use the carousel flag temporarly to indicate the cts must be recomputed
+		gf_filter_pck_set_carousel_version(dst_pck, ctx->notime ? 1 : 0);
 
 		gf_filter_pck_set_duration(dst_pck, ctx->pck_duration ? ctx->pck_duration : ctx->cur_fps.den);
-		if (ctx->in_seek) gf_filter_pck_set_seek_flag(dst_pck, GF_TRUE);
+		if (ctx->in_seek) {
+			gf_filter_pck_set_seek_flag(dst_pck, GF_TRUE);
+			if (ctx->first_gdr) {
+				ctx->first_gdr = GF_FALSE;
+				gf_filter_pck_set_sap(ctx->first_pck_in_au, GF_FILTER_SAP_4);
+			}
+		}
 
 		naludmx_update_time(ctx);
 		*au_start = GF_FALSE;
+		ctx->nb_frames++;
 	} else {
 		gf_filter_pck_set_framing(dst_pck, GF_FALSE, GF_FALSE);
 	}
@@ -1621,21 +2227,48 @@ void naludmx_add_subsample(GF_NALUDmxCtx *ctx, u32 subs_size, u8 subs_priority, 
 	ctx->subs_mapped_bytes += subs_size + ctx->nal_length;
 }
 
+static void naludmx_push_prefix(GF_NALUDmxCtx *ctx, u8 *data, u32 size, Bool avc_sei_rewrite)
+{
+	if (ctx->sei_buffer_alloc < ctx->sei_buffer_size + size + ctx->nal_length) {
+		ctx->sei_buffer_alloc = ctx->sei_buffer_size + size + ctx->nal_length;
+		ctx->sei_buffer = gf_realloc(ctx->sei_buffer, ctx->sei_buffer_alloc);
+	}
+
+	if (!ctx->bs_w) ctx->bs_w = gf_bs_new(ctx->sei_buffer + ctx->sei_buffer_size, ctx->nal_length + size, GF_BITSTREAM_WRITE);
+	else gf_bs_reassign_buffer(ctx->bs_w, ctx->sei_buffer + ctx->sei_buffer_size, ctx->nal_length + size);
+	gf_bs_write_int(ctx->bs_w, size, 8*ctx->nal_length);
+	memcpy(ctx->sei_buffer + ctx->sei_buffer_size + ctx->nal_length, data, size);
+
+	if (avc_sei_rewrite) {
+		u32 rw_sei_size = gf_avc_reformat_sei(ctx->sei_buffer + ctx->sei_buffer_size + ctx->nal_length, size, ctx->seirw, ctx->avc_state);
+		if (rw_sei_size < size) {
+			gf_bs_seek(ctx->bs_w, 0);
+			gf_bs_write_int(ctx->bs_w, rw_sei_size, 8*ctx->nal_length);
+			size = rw_sei_size;
+		}
+	}
+	ctx->sei_buffer_size += size + ctx->nal_length;
+}
 
 static s32 naludmx_parse_nal_hevc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool *skip_nal, Bool *is_slice, Bool *is_islice)
 {
+#ifdef GPAC_DISABLE_HEVC
+	return -1;
+#else
 	s32 ps_idx = 0;
 	s32 res;
 	u8 nal_unit_type, temporal_id, layer_id;
 	*skip_nal = GF_FALSE;
 
+	if (size<2) return -1;
+
 	gf_bs_reassign_buffer(ctx->bs_r, data, size);
-	res = gf_media_hevc_parse_nalu_bs(ctx->bs_r, ctx->hevc_state, &nal_unit_type, &temporal_id, &layer_id);
+	res = gf_hevc_parse_nalu_bs(ctx->bs_r, ctx->hevc_state, &nal_unit_type, &temporal_id, &layer_id);
 	ctx->nb_nalus++;
 
 	if (res < 0) {
 		if (res == -1) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Warning: Error parsing NAL unit\n", ctx->log_name));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Warning: Error parsing NAL unit\n", ctx->log_name));
 		}
 		*skip_nal = GF_TRUE;
 	}
@@ -1649,12 +2282,12 @@ static s32 naludmx_parse_nal_hevc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool
 	case GF_HEVC_NALU_VID_PARAM:
 		if (ctx->novpsext) {
 			//this may modify nal_size, but we don't use it for bitstream reading
-			ps_idx = gf_media_hevc_read_vps_ex(data, &size, ctx->hevc_state, GF_TRUE);
+			ps_idx = gf_hevc_read_vps_ex(data, &size, ctx->hevc_state, GF_TRUE);
 		} else {
 			ps_idx = ctx->hevc_state->last_parsed_vps_id;
 		}
 		if (ps_idx<0) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Error parsing Video Param Set\n", ctx->log_name));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Video Param Set\n", ctx->log_name));
 		} else {
 			naludmx_queue_param_set(ctx, data, size, GF_HEVC_NALU_VID_PARAM, ps_idx);
 		}
@@ -1663,7 +2296,7 @@ static s32 naludmx_parse_nal_hevc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool
 	case GF_HEVC_NALU_SEQ_PARAM:
 		ps_idx = ctx->hevc_state->last_parsed_sps_id;
 		if (ps_idx<0) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Error parsing Sequence Param Set\n", ctx->log_name));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Sequence Param Set\n", ctx->log_name));
 		} else {
 			naludmx_queue_param_set(ctx, data, size, GF_HEVC_NALU_SEQ_PARAM, ps_idx);
 		}
@@ -1672,27 +2305,17 @@ static s32 naludmx_parse_nal_hevc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool
 	case GF_HEVC_NALU_PIC_PARAM:
 		ps_idx = ctx->hevc_state->last_parsed_pps_id;
 		if (ps_idx<0) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Error parsing Picture Param Set\n", ctx->log_name));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Picture Param Set\n", ctx->log_name));
 		} else {
 			naludmx_queue_param_set(ctx, data, size, GF_HEVC_NALU_PIC_PARAM, ps_idx);
 		}
 		*skip_nal = GF_TRUE;
 		break;
 	case GF_HEVC_NALU_SEI_PREFIX:
-		gf_media_hevc_parse_sei(data, size, ctx->hevc_state);
+		gf_hevc_parse_sei(data, size, ctx->hevc_state);
 		if (!ctx->nosei) {
 			ctx->nb_sei++;
-
-			if (ctx->sei_buffer_alloc < ctx->sei_buffer_size + size + ctx->nal_length) {
-				ctx->sei_buffer_alloc = ctx->sei_buffer_size + size + ctx->nal_length;
-				ctx->sei_buffer = gf_realloc(ctx->sei_buffer, ctx->sei_buffer_alloc);
-			}
-
-			if (!ctx->bs_w) ctx->bs_w = gf_bs_new(ctx->sei_buffer + ctx->sei_buffer_size, ctx->nal_length + size, GF_BITSTREAM_WRITE);
-			else gf_bs_reassign_buffer(ctx->bs_w, ctx->sei_buffer + ctx->sei_buffer_size, ctx->nal_length + size);
-			gf_bs_write_int(ctx->bs_w, size, 8*ctx->nal_length);
-			memcpy(ctx->sei_buffer + ctx->sei_buffer_size + ctx->nal_length, data, size);
-			ctx->sei_buffer_size += size + ctx->nal_length;
+			naludmx_push_prefix(ctx, data, size, GF_FALSE);
 		} else {
 			ctx->nb_nalus--;
 		}
@@ -1727,6 +2350,8 @@ static s32 naludmx_parse_nal_hevc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool
 	case GF_HEVC_NALU_SLICE_CRA:
 		if (! ctx->is_playing) return 0;
 		*is_slice = GF_TRUE;
+		ctx->last_layer_id = layer_id;
+		ctx->last_temporal_id = temporal_id;
 		if (! *skip_nal) {
 			switch (ctx->hevc_state->s_info.slice_type) {
 			case GF_HEVC_SLICE_TYPE_P:
@@ -1764,15 +2389,209 @@ static s32 naludmx_parse_nal_hevc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool
 
 	//parsing is partial, see https://github.com/DolbyLaboratories/dlb_mp4base/blob/70a2e1d4d99a8439b7b8087bf50dd503eeea2291/src/esparser/parser_hevc.c#L1233
 	case GF_HEVC_NALU_DV_RPU:
-		ctx->hevc_state->dv_rpu = GF_TRUE;
+		if (ctx->dv_mode==DVMODE_CLEAN) {
+			*skip_nal = GF_TRUE;
+		} else {
+			ctx->nb_dv_rpu ++;
+			if (ctx->nb_dv_rpu==1)
+				naludmx_set_dolby_vision(ctx);
+		}
 		break;
 	case GF_HEVC_NALU_DV_EL:
-		ctx->hevc_state->dv_el = GF_TRUE;
+		if ((ctx->dv_mode==DVMODE_CLEAN) || (ctx->dv_mode==DVMODE_SINGLE)) {
+			*skip_nal = GF_TRUE;
+		} else {
+			ctx->nb_dv_el ++;
+			if (ctx->nb_dv_el==1)
+				naludmx_set_dolby_vision(ctx);
+		}
 		break;
 
 	default:
 		if (! ctx->is_playing) return 0;
-		GF_LOG(GF_LOG_WARNING, GF_LOG_PARSER, ("[%s] NAL Unit type %d not handled - adding\n", ctx->log_name, nal_unit_type));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] NAL Unit type %d not handled - adding\n", ctx->log_name, nal_unit_type));
+		break;
+	}
+	if (*skip_nal) return res;
+
+	ctx->linf[layer_id].layer_id_plus_one = layer_id + 1;
+	if (! ctx->linf[layer_id].max_temporal_id ) ctx->linf[layer_id].max_temporal_id = temporal_id;
+	else if (ctx->linf[layer_id].max_temporal_id < temporal_id) ctx->linf[layer_id].max_temporal_id = temporal_id;
+
+	if (! ctx->linf[layer_id].min_temporal_id ) ctx->linf[layer_id].min_temporal_id = temporal_id;
+	else if (ctx->linf[layer_id].min_temporal_id > temporal_id) ctx->linf[layer_id].min_temporal_id = temporal_id;
+
+	if (ctx->max_temporal_id[layer_id] < temporal_id)
+		ctx->max_temporal_id[layer_id] = temporal_id;
+	if (ctx->min_layer_id > layer_id) ctx->min_layer_id = layer_id;
+	return res;
+#endif // GPAC_DISABLE_HEVC
+}
+
+
+static s32 naludmx_parse_nal_vvc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool *skip_nal, Bool *is_slice, Bool *is_islice)
+{
+	s32 ps_idx = 0;
+	s32 res;
+	u8 nal_unit_type, temporal_id, layer_id;
+	*skip_nal = GF_FALSE;
+
+	if (size<2) return -1;
+	gf_bs_reassign_buffer(ctx->bs_r, data, size);
+	res = gf_vvc_parse_nalu_bs(ctx->bs_r, ctx->vvc_state, &nal_unit_type, &temporal_id, &layer_id);
+	ctx->nb_nalus++;
+
+	if (res < 0) {
+		if (res == -1) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Warning: Error parsing NAL unit\n", ctx->log_name));
+		}
+		*skip_nal = GF_TRUE;
+	}
+
+	if (layer_id && ctx->nosvc) {
+		*skip_nal = GF_TRUE;
+		return 0;
+	}
+
+	switch (nal_unit_type) {
+	case GF_VVC_NALU_VID_PARAM:
+		if (ctx->novpsext) {
+			//this may modify nal_size, but we don't use it for bitstream reading
+//			ps_idx = gf_hevc_read_vps_ex(data, &size, ctx->hevc_state, GF_TRUE);
+			ps_idx = ctx->vvc_state->last_parsed_vps_id;
+		} else {
+			ps_idx = ctx->vvc_state->last_parsed_vps_id;
+		}
+		if (ps_idx<0) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Video Param Set\n", ctx->log_name));
+		} else {
+			naludmx_queue_param_set(ctx, data, size, GF_VVC_NALU_VID_PARAM, ps_idx);
+		}
+		*skip_nal = GF_TRUE;
+		break;
+	case GF_VVC_NALU_SEQ_PARAM:
+		ps_idx = ctx->vvc_state->last_parsed_sps_id;
+		if (ps_idx<0) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Sequence Param Set\n", ctx->log_name));
+		} else {
+			naludmx_queue_param_set(ctx, data, size, GF_VVC_NALU_SEQ_PARAM, ps_idx);
+		}
+		*skip_nal = GF_TRUE;
+		break;
+	case GF_VVC_NALU_PIC_PARAM:
+		ps_idx = ctx->vvc_state->last_parsed_pps_id;
+		if (ps_idx<0) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Picture Param Set\n", ctx->log_name));
+		} else {
+			naludmx_queue_param_set(ctx, data, size, GF_VVC_NALU_PIC_PARAM, ps_idx);
+		}
+		*skip_nal = GF_TRUE;
+		break;
+	case GF_VVC_NALU_DEC_PARAM:
+		ps_idx = 0;
+		naludmx_queue_param_set(ctx, data, size, GF_VVC_NALU_DEC_PARAM, ps_idx);
+		*skip_nal = GF_TRUE;
+		break;
+	case GF_VVC_NALU_APS_PREFIX:
+		//for now we keep APS in the stream
+#if 0
+		ps_idx = ctx->vvc_state->last_parsed_aps_id;
+		if (ps_idx<0) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Decoder Param Set\n", ctx->log_name));
+		} else {
+			naludmx_queue_param_set(ctx, data, size, GF_VVC_NALU_APS_PREFIX, ps_idx);
+		}
+		*skip_nal = GF_TRUE;
+#else
+		//same logic as SEI
+		naludmx_push_prefix(ctx, data, size, GF_FALSE);
+		*skip_nal = GF_TRUE;
+#endif
+		break;
+	case GF_VVC_NALU_SEI_PREFIX:
+		gf_vvc_parse_sei(data, size, ctx->vvc_state);
+		if (!ctx->nosei) {
+			ctx->nb_sei++;
+
+			naludmx_push_prefix(ctx, data, size, GF_FALSE);
+		} else {
+			ctx->nb_nalus--;
+		}
+		*skip_nal = GF_TRUE;
+		break;
+	case GF_VVC_NALU_SEI_SUFFIX:
+		if (! ctx->is_playing) return 0;
+		gf_vvc_parse_sei(data, size, ctx->vvc_state);
+		if (ctx->nosei) {
+			*skip_nal = GF_TRUE;
+			ctx->nb_nalus--;
+		} else {
+			ctx->nb_sei++;
+		}
+		break;
+
+	case GF_VVC_NALU_PIC_HEADER:
+		if (! ctx->is_playing) return 0;
+		break;
+
+	/*slice_segment_layer_rbsp*/
+	case GF_VVC_NALU_SLICE_TRAIL:
+	case GF_VVC_NALU_SLICE_STSA:
+	case GF_VVC_NALU_SLICE_RADL:
+	case GF_VVC_NALU_SLICE_RASL:
+	case GF_VVC_NALU_SLICE_IDR_W_RADL:
+	case GF_VVC_NALU_SLICE_IDR_N_LP:
+	case GF_VVC_NALU_SLICE_CRA:
+	case GF_VVC_NALU_SLICE_GDR:
+		if (! ctx->is_playing) return 0;
+		*is_slice = GF_TRUE;
+		ctx->last_layer_id = layer_id;
+		ctx->last_temporal_id = temporal_id;
+		if (! *skip_nal) {
+			switch (ctx->vvc_state->s_info.slice_type) {
+			case GF_VVC_SLICE_TYPE_P:
+				if (layer_id) ctx->nb_e_p++;
+				else ctx->nb_p++;
+				break;
+			case GF_VVC_SLICE_TYPE_I:
+				if (layer_id) ctx->nb_e_i++;
+				else ctx->nb_i++;
+				*is_islice = GF_TRUE;
+				break;
+			case GF_VVC_SLICE_TYPE_B:
+				if (layer_id) ctx->nb_e_b++;
+				else ctx->nb_b++;
+				break;
+			case GF_VVC_SLICE_TYPE_UNKNOWN:
+				ctx->vvc_no_stats = GF_TRUE;
+				break;
+			}
+		}
+		break;
+
+	case GF_VVC_NALU_ACCESS_UNIT:
+		ctx->nb_aud++;
+		//no skip AUD in VVC
+
+		if (!ctx->opid) {
+			ctx->has_initial_aud = GF_TRUE;
+			memcpy(ctx->init_aud, data, 3);
+		}
+		break;
+	/*remove*/
+	case GF_VVC_NALU_FILLER_DATA:
+	case GF_VVC_NALU_END_OF_SEQ:
+	case GF_VVC_NALU_END_OF_STREAM:
+		*skip_nal = GF_TRUE;
+		break;
+
+	case GF_VVC_NALU_OPI:
+		if (! ctx->is_playing) return 0;
+		break;
+
+	default:
+		if (! ctx->is_playing) return 0;
+		GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] NAL Unit type %d not handled - adding\n", ctx->log_name, nal_unit_type));
 		break;
 	}
 	if (*skip_nal) return res;
@@ -1795,26 +2614,25 @@ static s32 naludmx_parse_nal_avc(GF_NALUDmxCtx *ctx, char *data, u32 size, u32 n
 	s32 ps_idx = 0;
 	s32 res = 0;
 
+	if (!size) return -1;
 	gf_bs_reassign_buffer(ctx->bs_r, data, size);
 	*skip_nal = GF_FALSE;
-	res = gf_media_avc_parse_nalu(ctx->bs_r, ctx->avc_state);
-	if (ctx->eos_in_bs)
-		return -1;
+	res = gf_avc_parse_nalu(ctx->bs_r, ctx->avc_state);
 	if (res < 0) {
 		if (res == -1) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Warning: Error parsing NAL unit\n", ctx->log_name));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Warning: Error parsing NAL unit\n", ctx->log_name));
 		}
 		*skip_nal = GF_TRUE;
 	}
 	ctx->nb_nalus++;
-	
+
 	switch (nal_type) {
 	case GF_AVC_NALU_SVC_SUBSEQ_PARAM:
 	case GF_AVC_NALU_SEQ_PARAM:
 		ps_idx = ctx->avc_state->last_ps_idx;
 		if (ps_idx<0) {
 			if (ctx->avc_state->sps[0].profile_idc) {
-				GF_LOG(ctx->avc_state->sps[0].profile_idc ? GF_LOG_WARNING : GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Error parsing Sequence Param Set\n", ctx->log_name));
+				GF_LOG(ctx->avc_state->sps[0].profile_idc ? GF_LOG_WARNING : GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Sequence Param Set\n", ctx->log_name));
 			}
 		} else {
 			naludmx_queue_param_set(ctx, data, size, GF_AVC_NALU_SEQ_PARAM, ps_idx);
@@ -1825,7 +2643,7 @@ static s32 naludmx_parse_nal_avc(GF_NALUDmxCtx *ctx, char *data, u32 size, u32 n
 	case GF_AVC_NALU_PIC_PARAM:
 		ps_idx = ctx->avc_state->last_ps_idx;
 		if (ps_idx<0) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Error parsing Picture Param Set\n", ctx->log_name));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Picture Param Set\n", ctx->log_name));
 		} else {
 			naludmx_queue_param_set(ctx, data, size, GF_AVC_NALU_PIC_PARAM, ps_idx);
 		}
@@ -1835,7 +2653,7 @@ static s32 naludmx_parse_nal_avc(GF_NALUDmxCtx *ctx, char *data, u32 size, u32 n
 	case GF_AVC_NALU_SEQ_PARAM_EXT:
 		ps_idx = ctx->avc_state->last_ps_idx;
 		if (ps_idx<0) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Error parsing Sequence Param Set Extension\n", ctx->log_name));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing Sequence Param Set Extension\n", ctx->log_name));
 		} else {
 			naludmx_queue_param_set(ctx, data, size, GF_AVC_NALU_SEQ_PARAM_EXT, ps_idx);
 		}
@@ -1844,25 +2662,9 @@ static s32 naludmx_parse_nal_avc(GF_NALUDmxCtx *ctx, char *data, u32 size, u32 n
 
 	case GF_AVC_NALU_SEI:
 		if (ctx->avc_state->sps_active_idx != -1) {
-			u32 rw_sei_size, sei_size = size;
-			if (ctx->sei_buffer_alloc < ctx->sei_buffer_size + sei_size + ctx->nal_length) {
-				ctx->sei_buffer_alloc = ctx->sei_buffer_size + sei_size + ctx->nal_length;
-				ctx->sei_buffer = gf_realloc(ctx->sei_buffer, ctx->sei_buffer_alloc);
-			}
-
-			if (!ctx->bs_w) ctx->bs_w = gf_bs_new(ctx->sei_buffer + ctx->sei_buffer_size, ctx->nal_length + sei_size, GF_BITSTREAM_WRITE);
-			else gf_bs_reassign_buffer(ctx->bs_w, ctx->sei_buffer + ctx->sei_buffer_size, ctx->nal_length + sei_size);
-			gf_bs_write_int(ctx->bs_w, sei_size, 8*ctx->nal_length);
-
-			memcpy(ctx->sei_buffer + ctx->sei_buffer_size + ctx->nal_length, data, sei_size);
-			rw_sei_size = gf_media_avc_reformat_sei(ctx->sei_buffer + ctx->sei_buffer_size + ctx->nal_length, sei_size, ctx->seirw, ctx->avc_state);
-			if (rw_sei_size < sei_size) {
-				gf_bs_seek(ctx->bs_w, 0);
-				gf_bs_write_int(ctx->bs_w, rw_sei_size, 8*ctx->nal_length);
-			}
+			naludmx_push_prefix(ctx, data, size, GF_TRUE);
 
 			*skip_nal = GF_TRUE;
-			ctx->sei_buffer_size += rw_sei_size + ctx->nal_length;
 
 			if (ctx->nosei) {
 				ctx->sei_buffer_size = 0;
@@ -1924,8 +2726,8 @@ static s32 naludmx_parse_nal_avc(GF_NALUDmxCtx *ctx, char *data, u32 size, u32 n
 		if (!ctx->explicit) {
 			u32 i;
 			for (i = 0; i < gf_list_count(ctx->pps); i ++) {
-				GF_AVCConfigSlot *slc = (GF_AVCConfigSlot*)gf_list_get(ctx->pps, i);
-				if (ctx->avc_state->s_info.pps->id == slc->id) {
+				GF_NALUFFParam *slc = (GF_NALUFFParam*)gf_list_get(ctx->pps, i);
+				if (ctx->avc_state->s_info.pps && ctx->avc_state->s_info.pps->id == slc->id) {
 					/* This PPS is used by an SVC NAL unit, it should be moved to the SVC Config Record) */
 					gf_list_rem(ctx->pps, i);
 					i--;
@@ -1961,41 +2763,136 @@ static s32 naludmx_parse_nal_avc(GF_NALUDmxCtx *ctx, char *data, u32 size, u32 n
 	case GF_AVC_NALU_SLICE_AUX:
 		*is_slice = GF_TRUE;
 		break;
+
+	case GF_AVC_NALU_DV_RPU:
+		if (ctx->dv_mode==DVMODE_CLEAN) {
+			*skip_nal = GF_TRUE;
+		} else {
+			ctx->nb_dv_rpu ++;
+			if (ctx->nb_dv_rpu==1)
+				naludmx_set_dolby_vision(ctx);
+		}
+		break;
+	case GF_AVC_NALU_DV_EL:
+		if ((ctx->dv_mode==DVMODE_CLEAN) || (ctx->dv_mode==DVMODE_SINGLE)) {
+			*skip_nal = GF_TRUE;
+		} else {
+			ctx->nb_dv_el ++;
+			if (ctx->nb_dv_el==1)
+				naludmx_set_dolby_vision(ctx);
+		}
+		break;
 	}
 	return res;
 }
 
-static void naludmx_on_eos(void *par)
+static void naldmx_switch_timestamps(GF_NALUDmxCtx *ctx, GF_FilterPacket *pck)
 {
-	GF_NALUDmxCtx *ctx = (GF_NALUDmxCtx *)par;
-	ctx->eos_in_bs = GF_TRUE;
+	//input pid sets some timescale - we flushed pending data , update cts
+	if (!ctx->notime) {
+		u64 ts = gf_filter_pck_get_cts(pck);
+		if (ts != GF_FILTER_NO_TS) {
+			ctx->prev_cts = ctx->cts;
+			ctx->cts = ts;
+		}
+		ts = gf_filter_pck_get_dts(pck);
+		if (ts != GF_FILTER_NO_TS) {
+			if (ctx->full_au_source) {
+				ctx->prev_dts = ctx->dts;
+				ctx->dts = ts;
+			} else {
+				GF_FilterClockType ck_type = gf_filter_pid_get_clock_info(ctx->ipid, NULL, NULL);
+				if (ck_type==GF_FILTER_CLOCK_PCR_DISC)
+					ctx->dts = ts;
+				else if (ctx->dts<ts)
+					ctx->dts=ts;
+
+				if (!ctx->prev_dts) ctx->prev_dts = ts;
+				else if (ctx->prev_dts != ts) {
+					u64 diff = ts;
+					diff -= ctx->prev_dts;
+					if (!ctx->cur_fps.den)
+						ctx->cur_fps.den = (u32) diff;
+					else if (ctx->cur_fps.den > diff)
+						ctx->cur_fps.den = (u32) diff;
+
+					ctx->prev_dts = ts;
+				}
+			}
+		}
+		ctx->pck_duration = gf_filter_pck_get_duration(pck);
+		if (ctx->src_pck) gf_filter_pck_unref(ctx->src_pck);
+		ctx->src_pck = pck;
+		gf_filter_pck_ref_props(&ctx->src_pck);
+		//store framing flags. If input_is_au_start, the first NAL of the first frame beginning in this packet will
+		//use the DTS/CTS of the input packet, otherwise we will use our internal POC recompute
+		gf_filter_pck_get_framing(pck, &ctx->input_is_au_start, NULL);
+	}
 }
+
+static void naldmx_check_timestamp_switch(GF_NALUDmxCtx *ctx, u32 *nalu_store_before, u32 bytes_drop, Bool *drop_packet, GF_FilterPacket *pck)
+{
+	if (*nalu_store_before) {
+		if (*nalu_store_before > bytes_drop) {
+			*nalu_store_before -= bytes_drop;
+		} else {
+			//all data from previous frame consumed, update timestamps with info from current packet
+			*nalu_store_before = 0;
+			naldmx_switch_timestamps(ctx, pck);
+			if (*drop_packet) {
+				gf_filter_pid_drop_packet(ctx->ipid);
+				*drop_packet = GF_FALSE;
+			}
+		}
+	}
+}
+
+static void naldmx_bs_log(void *udta, const char *field_name, u32 nb_bits, u64 field_val, s32 idx1, s32 idx2, s32 idx3)
+{
+	GF_NALUDmxCtx *ctx = (GF_NALUDmxCtx *) udta;
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, (" %s", field_name));
+	if (idx1>=0) {
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("_%d", idx1));
+		if (idx2>=0) {
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("_%d", idx2));
+			if (idx3>=0) {
+				GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("_%d", idx3));
+			}
+		}
+	}
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("=\""LLD, field_val));
+	if ((ctx->bsdbg==2) && ((s32) nb_bits > 1) )
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("(%u)", nb_bits));
+
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("\" "));
+}
+
 
 GF_Err naludmx_process(GF_Filter *filter)
 {
 	GF_NALUDmxCtx *ctx = gf_filter_get_udta(filter);
 	GF_FilterPacket *pck;
-	GF_Err e;
-	char *data;
 	u8 *start;
-	u32 pck_size;
-	u32 hdr_size_at_resume = 0;
 	u32 nalu_before = ctx->nb_nalus;
+	u32 nalu_store_before = 0;
 	s32 remain;
 	Bool is_eos = GF_FALSE;
+	Bool drop_packet = GF_FALSE;
+	u64 byte_offset = GF_FILTER_NO_BO;
 
 	//always reparse duration
 	if (!ctx->file_loaded)
 		naludmx_check_dur(filter, ctx);
 
 	pck = gf_filter_pid_get_packet(ctx->ipid);
-	if (!pck) {
+	if (!ctx->resume_from && !pck) {
 		if (gf_filter_pid_is_eos(ctx->ipid)) {
-			if (ctx->bytes_in_header || ctx->hdr_store_size) {
-				start = data = ctx->hdr_store;
-				remain = pck_size = ctx->bytes_in_header ? ctx->bytes_in_header : ctx->hdr_store_size;
-				ctx->bytes_in_header = 0;
-				ctx->hdr_store_size = 0;
+			if (ctx->nal_store_size) {
+				if (!ctx->is_playing)
+					return GF_OK;
+
+				start = ctx->nal_store;
+				remain = ctx->nal_store_size;
 				is_eos = GF_TRUE;
 				goto naldmx_flush;
 			}
@@ -2004,16 +2901,17 @@ GF_Err naludmx_process(GF_Filter *filter)
 			}
 			//single-frame stream
 			if (!ctx->poc_diff) ctx->poc_diff = 1;
+			ctx->strict_poc = STRICT_POC_OFF;
 			naludmx_enqueue_or_dispatch(ctx, NULL, GF_TRUE);
 			if (ctx->src_pck) gf_filter_pck_unref(ctx->src_pck);
 			ctx->src_pck = NULL;
 			if (!ctx->opid) return GF_EOS;
 
 			gf_filter_pid_set_info(ctx->opid, GF_PROP_PID_MAX_NALU_SIZE, &PROP_UINT(ctx->max_nalu_size) );
-			if (ctx->is_hevc) {
+			if (ctx->codecid==GF_CODECID_HEVC) {
 				naludmx_set_hevc_oinf(ctx, ctx->max_temporal_id);
 				naludmx_set_hevc_linf(ctx);
-				gf_filter_pid_set_property_str(ctx->opid, "hevc:min_lid", &PROP_UINT(ctx->min_layer_id) );
+				gf_filter_pid_set_info_str(ctx->opid, "hevc:min_lid", &PROP_UINT(ctx->min_layer_id) );
 			}
 			if (ctx->opid)
 				gf_filter_pid_set_eos(ctx->opid);
@@ -2022,112 +2920,76 @@ GF_Err naludmx_process(GF_Filter *filter)
 		return GF_OK;
 	}
 
-	data = (char *) gf_filter_pck_get_data(pck, &pck_size);
-	start = data;
-	remain = pck_size;
+	if (!ctx->is_playing && ctx->opid)
+		return GF_OK;
 
-	//input pid sets some timescale - we flushed pending data , update cts
-	if (ctx->timescale) {
-		u64 ts = gf_filter_pck_get_cts(pck);
-		if (ts != GF_FILTER_NO_TS)
-			ctx->cts = ts;
-		ts = gf_filter_pck_get_dts(pck);
-		if (ts != GF_FILTER_NO_TS) {
-			GF_FilterClockType ck_type = gf_filter_pid_get_clock_info(ctx->ipid, NULL, NULL);
-			if (ck_type==GF_FILTER_CLOCK_PCR_DISC)
-				ctx->dts = ts;
-			else if (ctx->dts<ts)
-				ctx->dts=ts;
+	//if we have bytes from previous packet in the header, we cannot switch timing until we know what these bytes are
+	if (!ctx->nal_store_size)
+		naldmx_switch_timestamps(ctx, pck);
 
-			if (!ctx->prev_dts) ctx->prev_dts = ts;
-			else if (ctx->prev_dts != ts) {
-				u64 diff = ts;
-				diff -= ctx->prev_dts;
-				if (!ctx->cur_fps.den)
-					ctx->cur_fps.den = (u32) diff;
-				else if (ctx->cur_fps.den > diff)
-					ctx->cur_fps.den = (u32) diff;
-
-				ctx->prev_dts = ts;
+	nalu_store_before = ctx->nal_store_size;
+	if (!ctx->resume_from && pck) {
+		u32 pck_size;
+		const u8 *data = gf_filter_pck_get_data(pck, &pck_size);
+		if (ctx->nal_store_alloc < ctx->nal_store_size + pck_size) {
+			ctx->nal_store_alloc = ctx->nal_store_size + pck_size;
+			ctx->nal_store = gf_realloc(ctx->nal_store, sizeof(char)*ctx->nal_store_alloc);
+			if (!ctx->nal_store) {
+				ctx->nal_store_alloc = 0;
+				return GF_OUT_OF_MEM;
 			}
 		}
-		ctx->pck_duration = gf_filter_pck_get_duration(pck);
-		if (ctx->src_pck) gf_filter_pck_unref(ctx->src_pck);
-		ctx->src_pck = pck;
-		gf_filter_pck_ref_props(&ctx->src_pck);
-		//store framing flags. If input_is_au_start, the first NAL of the first frame begining in this packet will
-		//use the DTS/CTS of the inout packet, otherwise we will use our internal POC recompute
-		gf_filter_pck_get_framing(pck, &ctx->input_is_au_start, NULL);
+		byte_offset = gf_filter_pck_get_byte_offset(pck);
+		if (byte_offset != GF_FILTER_NO_BO)
+			byte_offset -= ctx->nal_store_size;
+		memcpy(ctx->nal_store + ctx->nal_store_size, data, sizeof(char)*pck_size);
+		ctx->nal_store_size += pck_size;
+		drop_packet = GF_TRUE;
 	}
-
-	//we stored some data to find the complete vosh, aggregate this packet with current one
-	if (!ctx->resume_from && ctx->hdr_store_size) {
-		if (ctx->hdr_store_alloc < ctx->hdr_store_size + pck_size) {
-			ctx->hdr_store_alloc = ctx->hdr_store_size + pck_size;
-			ctx->hdr_store = gf_realloc(ctx->hdr_store, sizeof(char)*ctx->hdr_store_alloc);
-		}
-		hdr_size_at_resume = ctx->hdr_store_size;
-		memcpy(ctx->hdr_store + ctx->hdr_store_size, data, sizeof(char)*pck_size);
-		ctx->hdr_store_size += pck_size;
-		start = data = ctx->hdr_store;
-		remain = pck_size = ctx->hdr_store_size;
-	}
+	start = ctx->nal_store;
+	remain = ctx->nal_store_size;
 
 	if (ctx->resume_from) {
 		if (ctx->opid && gf_filter_pid_would_block(ctx->opid))
 			return GF_OK;
 
-		//resume from data copied internally
-		if (ctx->hdr_store_size) {
-			assert(ctx->resume_from <= ctx->hdr_store_size);
-			start = data = ctx->hdr_store + ctx->resume_from;
-			remain = pck_size = ctx->hdr_store_size - ctx->resume_from;
-		} else {
-			assert((s32)ctx->resume_from >0);
-            if (ctx->resume_from > (u32) remain) {
-                GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] something wrong, resuming parsing at %d bytes but only %d bytes in packet, discarding data\n", ctx->log_name, ctx->resume_from, remain));
-            } else {
-                start += ctx->resume_from;
-                remain -= ctx->resume_from;
-            }
-		}
+		assert(ctx->resume_from < ctx->nal_store_size);
+		start += ctx->resume_from;
+		remain -= ctx->resume_from;
 		ctx->resume_from = 0;
+
+		if (!pck && gf_filter_pid_is_eos(ctx->ipid))
+			is_eos = GF_TRUE;
 	}
 
 naldmx_flush:
 	if (!ctx->bs_r) {
 		ctx->bs_r = gf_bs_new(start, remain, GF_BITSTREAM_READ);
+
+#ifndef GPAC_DISABLE_LOG
+		if (ctx->bsdbg && gf_log_tool_level_on(GF_LOG_MEDIA, GF_LOG_DEBUG))
+			gf_bs_set_logger(ctx->bs_r, naldmx_bs_log, ctx);
+#endif
+
 	} else {
 		gf_bs_reassign_buffer(ctx->bs_r, start, remain);
 	}
-	if (is_eos)
-		gf_bs_set_eos_callback(ctx->bs_r, naludmx_on_eos, ctx);
-	ctx->eos_in_bs = GF_FALSE;
 
     assert(remain>=0);
-    
+
 	while (remain) {
 		u8 *pck_data;
-		u8 *hdr_start;
-		u32 hdr_avail;
-		u8 *pck_start;
-		u32 pck_avail;
+		u8 *nal_data;
+		u32 nal_size;
 		s32 current;
-		Bool nal_hdr_in_store = GF_FALSE;
-		Bool nal_sc_in_store = GF_FALSE;
-		u32 nal_bytes_from_store = 0;
 		Bool skip_nal = GF_FALSE;
-		u64 size=0;
-		u32 sc_size, store_sc_size=0;
-		u32 bytes_from_store = 0;
-		u32 hdr_offset = 0;
-		Bool full_nal_required = GF_FALSE;
+		u32 sc_size=0;
 		u32 nal_type = 0;
 		u32 nal_ref_idc = 0;
 		s32 next=0;
 		u32 next_sc_size=0;
 		s32 nal_parse_result;
-		Bool slice_is_ref, slice_force_ref;
+		Bool slice_is_idr, slice_force_ref;
 		Bool is_slice = GF_FALSE;
 		Bool is_islice = GF_FALSE;
 		Bool bottom_field_flag = GF_FALSE;
@@ -2139,227 +3001,59 @@ naldmx_flush:
 		Bool bIntraSlice = GF_FALSE;
 		GF_FilterSAPType au_sap_type = GF_FILTER_SAP_NONE;
 		Bool slice_is_b = GF_FALSE;
-		Bool full_nal = GF_FALSE;
+		Bool check_dep = GF_FALSE;
+		Bool force_au_flush = GF_FALSE;
 		s32 slice_poc = 0;
-		u32 next_size = 0;
 
-		Bool copy_last_bytes = GF_FALSE;
-
-		//not enough bytes to parse start code
+		//not enough bytes to parse start code + nal hdr
 		if (!is_eos && (remain<6)) {
-			memcpy(ctx->hdr_store, start, remain);
-			ctx->bytes_in_header = remain;
 			break;
 		}
-		current = -1;
 
-		//we have some potential bytes of a start code in the store, copy some more bytes and check if valid start code.
-		//if not, dispatch these bytes as continuation of the data
-		if (ctx->bytes_in_header) {
-			Bool split_start_code=GF_FALSE;
+		//locate next start code
+		current = gf_media_nalu_next_start_code(start, remain, &sc_size);
+		if (current == remain)
+			current = -1;
 
-			memcpy(ctx->hdr_store + ctx->bytes_in_header, start, SAFETY_NAL_STORE - ctx->bytes_in_header);
-			current = gf_media_nalu_next_start_code(ctx->hdr_store, SAFETY_NAL_STORE, &sc_size);
-			if (current==SAFETY_NAL_STORE)
-				current = -1;
-
-			//no start code in stored buffer
-			if (current<0) {
-				if (!ctx->next_nal_end_skip) {
-					e = naludmx_realloc_last_pck(ctx, ctx->bytes_in_header, &pck_data);
-					if (e==GF_OK) {
-						memcpy(pck_data, ctx->hdr_store, ctx->bytes_in_header);
-					}
-				}
-				ctx->bytes_in_header = 0;
-			} else {
-				//if start is greater than stored data, the nal is completely in the input packet (but the start code may not be)
-				if (current + sc_size > ctx->bytes_in_header) {
-					//we need to dispatch current bytes from the header, whether all these bytes were in the previous
-					//packet or some are in the new one does not matter
-
-					bytes_from_store = current;
-					//the offset to the NAL first byte in the store is current+sc_size,
-					//hence current+sc_pos-ctx->bytes_in_header in the new packet
-					hdr_offset = current + sc_size - ctx->bytes_in_header;
-					nal_sc_in_store = GF_TRUE;
-				} else {
-					//this is trickier, nal start is in the store buffer
-					u8 lastb2, lastb1, nextb1;
-
-					lastb2 = ctx->hdr_store[ctx->bytes_in_header-2];
-					lastb1 = ctx->hdr_store[ctx->bytes_in_header-1];
-					nextb1 = start[0];
-
-					if (!lastb1 && !lastb2) { split_start_code=GF_TRUE; }
-					else if (!lastb1 && !nextb1) { split_start_code = GF_TRUE; }
-
-					if (split_start_code ) {
-						u32 store_remain = SAFETY_NAL_STORE - (current + sc_size);
-						u32 following_sc_size;
-						s32 following = gf_media_nalu_next_start_code(ctx->hdr_store + current+sc_size, store_remain, &following_sc_size);
-						assert(!current);
-						if ((following>0) && (following + current+sc_size < ctx->bytes_in_header)) {
-							next_size = following - current;
-							nal_bytes_from_store = next_size;
-							store_sc_size = sc_size;
-						} else {
-							split_start_code = 0;
-						}
-					}
-
-					//we still have current bytes to dispatch
-					bytes_from_store = current;
-
-					//the offset in the STORE is current+sc_size, and we parse the store, not the packet !!
-					hdr_offset = current + sc_size;
-
-					nal_hdr_in_store = GF_TRUE;
-
-
-					if (!split_start_code) {
-						if (sc_size == ctx->bytes_in_header) {
-							nal_hdr_in_store = GF_FALSE;
-							sc_size = 0;
-							hdr_offset=0;
-							nal_bytes_from_store = 0;
-						} else {
-							//we need to copy the nal first bytes from the store
-							nal_bytes_from_store = ctx->bytes_in_header - (current + sc_size);
-						}
-					}
-
-				}
-				if (!split_start_code) {
-					ctx->bytes_in_header = 0;
-				}
-			}
-		}
-		//no starcode in store, look for startcode in packet
-		if (current == -1) {
-			//locate next start code
-			current = gf_media_nalu_next_start_code(start, remain, &sc_size);
-			if (current == remain)
-				current = -1;
-
-			//no start code, dispatch the block
-			if (current<0) {
-				u8 b3, b2, b1;
-				if (! ctx->first_pck_in_au) {
-					GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[%s] no start code in block and no frame started, discarding data\n", ctx->log_name));
-					break;
-				}
-				size = remain;
-				b3 = start[remain-3];
-				b2 = start[remain-2];
-				b1 = start[remain-1];
-				//we may have a startcode at the end of the packet, store it and don't dispatch the last 3 bytes !
-				if (!is_eos && (!b1 || !b2 || !b3)) {
-					copy_last_bytes = GF_TRUE;
-					assert(size >= 3);
-					size -= 3;
-					ctx->bytes_in_header = 3;
-				}
-				if (!ctx->next_nal_end_skip) {
-					e = naludmx_realloc_last_pck(ctx, (u32) size, &pck_data);
-					if (e==GF_OK)
-						memcpy(pck_data, start, (size_t) size);
-				}
-
-				if (copy_last_bytes) {
-					memcpy(ctx->hdr_store, start+remain-3, 3);
-				}
-				break;
-			}
+		//no start code, gontinue gathering data
+		if (current<0) {
+			break;
 		}
 
 		assert(current>=0);
 
-
-		//skip if no output pid
-		if (!ctx->opid && current) {
+		//unknown data before start of nal, may happen when tuning in, discard
+		if (current) {
 			assert(remain>=current);
-            assert((s32) current >= 0);
-            
 			start += current;
 			remain -= current;
 			current = 0;
-			ctx->next_nal_end_skip = GF_FALSE;
+			naldmx_check_timestamp_switch(ctx, &nalu_store_before, current, &drop_packet, pck);
 		}
 
-		//dispatch remaining bytes
-		if (current>0) {
-			e = GF_EOS;
-			//flush remaining bytes in NAL
-			if (!ctx->next_nal_end_skip) {
-				e = naludmx_realloc_last_pck(ctx, current, &pck_data);
-			}
-			//bytes were partly in store, partly in packet
-			if (bytes_from_store) {
-				if (bytes_from_store>=(u32) current) {
-					//we still have that many bytes from the store to dispatch
-//					bytes_from_store -= current;
-				} else {
-					//we are done, the nal header and start code is completely in the new packet
-					u32 shift = current - bytes_from_store;
-//					bytes_from_store = 0;
-                    assert(remain >= (s32) shift);
-                    assert((s32) shift >= 0);
-					start += shift;
-					remain -= shift;
-					nal_sc_in_store = 0;
-				}
-				if (e==GF_OK) {
-					memcpy(pck_data, ctx->hdr_store, current);
-				}
-			} else {
-				if (e==GF_OK) {
-					memcpy(pck_data, start, current);
-				}
-				assert(remain>=current);
-				start += current;
-				remain -= current;
-			}
-		}
 		if (!remain)
 			break;
 
-		//nal hdr is in the store, use the store to parse slice header
-		if (nal_hdr_in_store) {
-			hdr_start = ctx->hdr_store + hdr_offset;
-			hdr_avail = SAFETY_NAL_STORE - hdr_offset;
-			pck_start = start;
-			pck_avail = remain;
-			sc_size = 0;
-		}
-		//nal hdr is in new packet at hdr_offset, use the packet to parse slice header
-		else if (nal_sc_in_store) {
-			hdr_start = start + hdr_offset;
-			hdr_avail = remain - hdr_offset;
-			pck_start = hdr_start;
-			pck_avail = hdr_avail;
-			sc_size = 0;
-		}
-		//nal hdr is in new packet start + sc_size, use the packet to parse slice header
-		else {
-			hdr_start = start + sc_size;
-			hdr_avail = remain - sc_size;
-			pck_start = hdr_start;
-			pck_avail = hdr_avail;
+		//not enough bytes to parse start code + nal hdr
+		if (!is_eos && (remain<6)) {
+			break;
 		}
 
+		nal_data = start + sc_size;
+		nal_size = remain - sc_size;
+
 		//figure out which nal we need to completely load
-		if (ctx->is_hevc) {
-			nal_type = hdr_start[0];
+		if (ctx->codecid==GF_CODECID_HEVC) {
+			nal_type = nal_data[0];
 			nal_type = (nal_type & 0x7E) >> 1;
+
 			switch (nal_type) {
 			case GF_HEVC_NALU_VID_PARAM:
 			case GF_HEVC_NALU_SEQ_PARAM:
 			case GF_HEVC_NALU_PIC_PARAM:
+				force_au_flush = GF_TRUE;
 			case GF_HEVC_NALU_SEI_PREFIX:
 			case GF_HEVC_NALU_SEI_SUFFIX:
-				if (!ctx->analyze)
-					full_nal_required = GF_TRUE;
 				break;
 			case GF_HEVC_NALU_SLICE_TRAIL_N:
 			case GF_HEVC_NALU_SLICE_TSA_N:
@@ -2369,13 +3063,57 @@ naldmx_flush:
 			case GF_HEVC_NALU_SLICE_RSV_VCL_N10:
 			case GF_HEVC_NALU_SLICE_RSV_VCL_N12:
 			case GF_HEVC_NALU_SLICE_RSV_VCL_N14:
-				if (ctx->deps) {
-					HEVC_VPS *vps;
-					u32 temporal_id = hdr_start[1] & 0x7;
-					vps = & ctx->hevc_state->vps[ctx->hevc_state->s_info.sps->vps_id];
-					if (temporal_id + 1 < vps->max_sub_layers) {
-						nal_ref_idc = GF_TRUE;
+				check_dep = GF_TRUE;
+				break;
+			default:
+				if (nal_type<GF_HEVC_NALU_VID_PARAM)
+					nal_ref_idc = GF_TRUE;
+				break;
+			}
+			//check if VPS/SPS/PPS lid/tid are greater than last seen VCL. If not, force a picture flush
+			//not doing so could lead in dispatching the config changed before the current AU is sent
+			if (force_au_flush) {
+				if (!ctx->first_pck_in_au) {
+					force_au_flush = GF_FALSE;
+				} else {
+					u8 layer_id = nal_data[0] & 1;
+					layer_id<<=5;
+					layer_id |= (nal_data[1] & 0xF8) >> 3;
+					u8 temporal_id = nal_data[2] & 0x7;
+					if (ctx->last_layer_id < layer_id)
+						force_au_flush = GF_FALSE;
+					else if (ctx->last_layer_id == layer_id) {
+						if (ctx->last_temporal_id < temporal_id)
+							force_au_flush = GF_FALSE;
 					}
+				}
+			}
+		} else if (ctx->codecid==GF_CODECID_VVC) {
+			nal_type = nal_data[1]>>3;
+			switch (nal_type) {
+			case GF_VVC_NALU_OPI:
+			case GF_VVC_NALU_DEC_PARAM:
+			case GF_VVC_NALU_VID_PARAM:
+			case GF_VVC_NALU_SEQ_PARAM:
+			case GF_VVC_NALU_PIC_PARAM:
+				force_au_flush = GF_TRUE;
+			case GF_VVC_NALU_SEI_PREFIX:
+			case GF_VVC_NALU_SEI_SUFFIX:
+			case GF_VVC_NALU_APS_PREFIX:
+			case GF_VVC_NALU_APS_SUFFIX:
+			case GF_VVC_NALU_PIC_HEADER:
+				break;
+
+			case GF_VVC_NALU_SLICE_TRAIL:
+			case GF_VVC_NALU_SLICE_STSA:
+			case GF_VVC_NALU_SLICE_RADL:
+			case GF_VVC_NALU_SLICE_RASL:
+			case GF_VVC_NALU_SLICE_IDR_W_RADL:
+			case GF_VVC_NALU_SLICE_IDR_N_LP:
+			case GF_VVC_NALU_SLICE_CRA:
+			case GF_VVC_NALU_SLICE_GDR:
+				if (ctx->deps) {
+					check_dep = GF_TRUE;
 				}
 				break;
 			default:
@@ -2383,109 +3121,51 @@ naldmx_flush:
 					nal_ref_idc = GF_TRUE;
 				break;
 			}
-		} else {
-			nal_type = hdr_start[0] & 0x1F;
-			switch (nal_type) {
-			case GF_AVC_NALU_SVC_SUBSEQ_PARAM:
-			case GF_AVC_NALU_SEQ_PARAM:
-			case GF_AVC_NALU_PIC_PARAM:
-			case GF_AVC_NALU_SVC_PREFIX_NALU:
-			//we also need the SEI in AVC since some SEI messages have to be removed
-			case GF_AVC_NALU_SEI:
-				if (!ctx->analyze)
-					full_nal_required = GF_TRUE;
-				break;
-			default:
-				break;
-			}
-			nal_ref_idc = (hdr_start[0] & 0x60) >> 5;
-		}
-		if (!next_size) {
-			if (full_nal_required && !is_eos) {
-				//we need the full nal loaded
-				next = gf_media_nalu_next_start_code(pck_start, pck_avail, &next_sc_size);
-				if (!ctx->full_au_source && (next==pck_avail))
-					next = -1;
 
-				if (next<0) {
-					if (sc_size) pck_avail += sc_size;
-					if (ctx->hdr_store_alloc < ctx->hdr_store_size + pck_avail) {
-						ctx->hdr_store_alloc = ctx->hdr_store_size + pck_avail;
-						ctx->hdr_store = gf_realloc(ctx->hdr_store, sizeof(char)*ctx->hdr_store_alloc);
+			//check if VPS/SPS/PPS/OPI/DEC lid/tid are greater than last seen VCL. If not, force a picture flush
+			//not doing so could lead in dispatching the config changed before the current AU is sent
+			if (force_au_flush) {
+				if (!ctx->first_pck_in_au) {
+					force_au_flush = GF_FALSE;
+				} else {
+					u8 layer_id = nal_data[0] & 0x3f;
+					u8 temporal_id = (nal_data[1] & 0x7);
+					if (ctx->last_layer_id < layer_id)
+						force_au_flush = GF_FALSE;
+					else if (ctx->last_layer_id == layer_id) {
+						if (ctx->last_temporal_id < temporal_id)
+							force_au_flush = GF_FALSE;
 					}
-					memcpy(ctx->hdr_store + ctx->hdr_store_size, start, sizeof(char)*pck_avail);
-					ctx->hdr_store_size += pck_avail;
-					gf_filter_pid_drop_packet(ctx->ipid);
-					return GF_OK;
 				}
-			} else {
-				next = gf_media_nalu_next_start_code(pck_start, pck_avail, &next_sc_size);
-				if ( (next == pck_avail) && !ctx->full_au_source) {
-					if (!is_eos)
-						next = -1;
-					else if (ctx->is_hevc && pck_avail<2)
-						next = -1;
-				}
-			}
-
-			//ok we have either a full nal, or the start of a NAL we can start to process, parse NAL
-			if (next<0) {
-				size = pck_avail;
-				if (!nal_hdr_in_store) {
-					hdr_avail = (u32) size;
-				}
-			} else {
-				full_nal = GF_TRUE;
-				size = next;
-				if (full_nal_required) {
-					if (!nal_bytes_from_store && nal_sc_in_store) {
-						hdr_avail = (u32) size;
-						hdr_start = pck_start;
-
-					} else {
-						size += nal_bytes_from_store;
-						//we require full nal but begining of the nal is in the store, the rest in the current packet.
-						//We must copy the complete nal in the store before parsing it
-						if (nal_bytes_from_store && (size > SAFETY_NAL_STORE)) {
-							u32 copy_size = (u32) (size - nal_bytes_from_store);
-							if (ctx->hdr_store_alloc<copy_size) {
-								ctx->hdr_store_alloc = copy_size;
-								ctx->hdr_store = gf_realloc(ctx->hdr_store, ctx->hdr_store_alloc);
-							}
-							memcpy(ctx->hdr_store + hdr_offset + nal_bytes_from_store, start, copy_size);
-						}
-						hdr_avail = (u32) size;
-					}
-				} else if (hdr_avail>(u32) size && !nal_bytes_from_store)
-					hdr_avail = (u32) size;
-			}
-			if (!full_nal && (size < SAFETY_NAL_STORE/2)) {
-				assert(!nal_sc_in_store);
-				assert(!nal_hdr_in_store);
-				assert(remain < SAFETY_NAL_STORE);
-				//we may have garbage at the end os stream, if the stream was cancelled in the middle (truncated nal)
-				if (!is_eos) {
-					memcpy(ctx->hdr_store, start, remain);
-					ctx->bytes_in_header = remain;
-				}
-				break;
 			}
 		} else {
-			full_nal = GF_TRUE;
-			size = next_size;
+			nal_type = nal_data[0] & 0x1F;
+			nal_ref_idc = (nal_data[0] & 0x60) >> 5;
 		}
 
-		if (ctx->is_hevc) {
-			nal_parse_result = naludmx_parse_nal_hevc(ctx, hdr_start, hdr_avail, &skip_nal, &is_slice, &is_islice);
-		} else {
-			nal_parse_result = naludmx_parse_nal_avc(ctx, hdr_start, hdr_avail, nal_type, &skip_nal, &is_slice, &is_islice);
+		//locate next NAL start
+		next = gf_media_nalu_next_start_code(nal_data, nal_size, &next_sc_size);
+		if (!is_eos && (next == nal_size) && !ctx->full_au_source) {
+			next = -1;
 		}
 
-		if (ctx->eos_in_bs && is_eos) {
+		//next nal start not found, wait
+		if (next<0) {
 			break;
 		}
 
+		//this is our exact NAL size, without start code
+		nal_size = next;
 
+		if (ctx->codecid==GF_CODECID_HEVC) {
+			nal_parse_result = naludmx_parse_nal_hevc(ctx, nal_data, nal_size, &skip_nal, &is_slice, &is_islice);
+		} else if (ctx->codecid==GF_CODECID_VVC) {
+			nal_parse_result = naludmx_parse_nal_vvc(ctx, nal_data, nal_size, &skip_nal, &is_slice, &is_islice);
+		} else {
+			nal_parse_result = naludmx_parse_nal_avc(ctx, nal_data, nal_size, nal_type, &skip_nal, &is_slice, &is_islice);
+		}
+
+		//dispatch right away if analyze
 		if (ctx->analyze) {
 			skip_nal = GF_FALSE;
 			ctx->sei_buffer_size = 0;
@@ -2493,99 +3173,90 @@ naldmx_flush:
 
 		//new frame - if no slices, we detected the new frame on AU delimiter, don't flush new frame !
 		if ((nal_parse_result>0) && !ctx->first_slice_in_au) {
-			//new frame - we flush later on
-			naludmx_finalize_au_flags(ctx);
-
-			ctx->has_islice = GF_FALSE;
-			ctx->first_slice_in_au = GF_TRUE;
-			ctx->sei_recovery_frame_count = -1;
-			ctx->au_sap = GF_FILTER_SAP_NONE;
-			ctx->bottom_field_flag = GF_FALSE;
+			naludmx_end_access_unit(ctx);
 		}
+
+		naludmx_check_pid(filter, ctx, force_au_flush);
+		if (!ctx->opid) skip_nal = GF_TRUE;
 
 		if (skip_nal) {
-			assert(remain >= (s32)sc_size+next);
-			if (next<0) {
-				u8 b3, b2, b1;
-				b3 = start[remain-3];
-				b2 = start[remain-2];
-				b1 = start[remain-1];
-				//we may have a startcode at the end of the packet, store it and don't dispatch the last 3 bytes !
-				if (!b1 || !b2 || !b3) {
-					memcpy(ctx->hdr_store, start+remain-3, 3);
-					ctx->bytes_in_header = 3;
-				}
-				ctx->next_nal_end_skip = GF_TRUE;
-				break;
-			}
-			assert(remain >= next);
-			start = pck_start + next;
-            assert((u32) (start - (u8*)data) <= pck_size);
-			remain = pck_size - (u32) (start - (u8*)data);
-			if (nal_hdr_in_store) {
-				if (full_nal && ctx->bytes_in_header) {
-					memmove(ctx->hdr_store, hdr_start+nal_bytes_from_store, ctx->bytes_in_header - nal_bytes_from_store);
-					ctx->bytes_in_header -= next_size+store_sc_size;
-				} else {
-					ctx->bytes_in_header = 0;
-				}
-			}
+			nal_size += sc_size;
+			assert((u32) remain >= nal_size);
+			start += nal_size;
+			remain -= nal_size;
+			naldmx_check_timestamp_switch(ctx, &nalu_store_before, nal_size, &drop_packet, pck);
 			continue;
 		}
-		ctx->next_nal_end_skip = GF_FALSE;
-
-		naludmx_check_pid(filter, ctx);
-		if (!ctx->opid) {
-            u32 skip = sc_size+next;
-			assert(remain >= (s32) skip);
-            if (skip) {
-                start += sc_size+next;
-                remain -= sc_size+next;
-            } else {
-                ctx->bytes_in_header = 0;
-            }
-			continue;
-		}
-
-		//at this point, we no longer reaggregate packets
-		ctx->hdr_store_size = 0;
-
 
 		if (!ctx->is_playing) {
-			ctx->resume_from = (u32) ( (char *)start -  (char *)data);
-            assert(ctx->resume_from<=pck_size);
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_PARSER, ("[%s] not yet playing\n", ctx->log_name));
+			ctx->resume_from = (u32) (start - ctx->nal_store);
+            assert(ctx->resume_from<=ctx->nal_store_size);
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[%s] not yet playing\n", ctx->log_name));
+
+			if (drop_packet)
+				gf_filter_pid_drop_packet(ctx->ipid);
 			return GF_OK;
 		}
 		if (ctx->in_seek) {
 			u64 nb_frames_at_seek = (u64) (ctx->start_range * ctx->cur_fps.num);
 			if (ctx->cts + ctx->cur_fps.den >= nb_frames_at_seek) {
 				//u32 samples_to_discard = (ctx->cts + ctx->dts_inc) - nb_samples_at_seek;
-				ctx->in_seek = GF_FALSE;
+				if (ctx->seek_gdr_count)
+					ctx->seek_gdr_count--;
+				else
+					ctx->in_seek = GF_FALSE;
 			}
 		}
 
 		if (nal_parse_result<0) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[%s] Error parsing NAL Unit type %d - skipping\n", ctx->log_name,  nal_type));
-			assert(remain >= (s32) sc_size+next);
-			start += sc_size+next;
-			remain -= sc_size+next;
+			if (byte_offset != GF_FILTER_NO_BO) {
+				u64 bo = byte_offset;
+				bo += (start - ctx->nal_store);
+
+				GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing NAL Unit %d (byte offset "LLU" size %d type %d frame %d last POC %d) - skipping\n", ctx->log_name, ctx->nb_nalus, bo, nal_size, nal_type, ctx->nb_frames, ctx->last_poc));
+			} else {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[%s] Error parsing NAL Unit %d (size %d type %d frame %d last POC %d) - skipping\n", ctx->log_name, ctx->nb_nalus, nal_size, nal_type, ctx->nb_frames, ctx->last_poc));
+			}
+			nal_size += sc_size;
+			assert((u32) remain >= nal_size);
+			start += nal_size;
+			remain -= nal_size;
+			naldmx_check_timestamp_switch(ctx, &nalu_store_before, nal_size, &drop_packet, pck);
 			continue;
 		}
+
+		if (check_dep) {
+			if ((ctx->codecid==GF_CODECID_HEVC) && ctx->hevc_state->s_info.sps) {
+				HEVC_VPS *vps;
+				u32 temporal_id = nal_data[1] & 0x7;
+				vps = & ctx->hevc_state->vps[ctx->hevc_state->s_info.sps->vps_id];
+				if (temporal_id + 1 < vps->max_sub_layers) {
+					nal_ref_idc = GF_TRUE;
+				}
+			} else if (ctx->codecid==GF_CODECID_VVC) {
+				if (ctx->vvc_state->s_info.non_ref_pic) {
+					nal_ref_idc = GF_FALSE;
+				} else {
+					//todo
+					nal_ref_idc = GF_TRUE;
+				}
+			}
+		}
+
 
 		if (is_islice) ctx->has_islice = GF_TRUE;
 
 		//store all variables needed to compute POC/CTS and sample SAP and recovery info
-		if (ctx->is_hevc) {
-
-			slice_is_ref = gf_media_hevc_slice_is_IDR(ctx->hevc_state);
+		if (ctx->codecid==GF_CODECID_HEVC) {
+#ifndef GPAC_DISABLE_HEVC
+			slice_is_idr = gf_hevc_slice_is_IDR(ctx->hevc_state);
 
 			recovery_point_valid = ctx->hevc_state->sei.recovery_point.valid;
 			recovery_point_frame_cnt = ctx->hevc_state->sei.recovery_point.frame_cnt;
-			bIntraSlice = gf_media_hevc_slice_is_intra(ctx->hevc_state);
+			bIntraSlice = gf_hevc_slice_is_intra(ctx->hevc_state);
 
 			au_sap_type = GF_FILTER_SAP_NONE;
-			if (gf_media_hevc_slice_is_IDR(ctx->hevc_state)) {
+			if (gf_hevc_slice_is_IDR(ctx->hevc_state)) {
 				au_sap_type = GF_FILTER_SAP_1;
 			}
 			else {
@@ -2612,7 +3283,65 @@ naldmx_flush:
 				slice_is_b = GF_TRUE;
 				break;
 			}
+#endif // GPAC_DISABLE_HEVC
+		} else if (ctx->codecid==GF_CODECID_VVC) {
+			slice_is_idr = gf_vvc_slice_is_ref(ctx->vvc_state);
+			recovery_point_valid = ctx->vvc_state->s_info.recovery_point_valid;
+			recovery_point_frame_cnt = ctx->vvc_state->s_info.gdr_recovery_count;
 
+//			commented, set below
+//			if (ctx->vvc_state->s_info.irap_or_gdr_pic && !ctx->vvc_state->s_info.gdr_pic)
+//				bIntraSlice = GF_TRUE; //gf_hevc_slice_is_intra(ctx->hevc_state);
+
+			au_sap_type = GF_FILTER_SAP_NONE;
+			if (ctx->vvc_state->s_info.irap_or_gdr_pic && !ctx->vvc_state->s_info.gdr_pic) {
+				bIntraSlice = GF_TRUE;
+
+				switch (ctx->vvc_state->s_info.nal_unit_type) {
+				case GF_VVC_NALU_SLICE_CRA:
+					au_sap_type = GF_FILTER_SAP_3;
+					slice_is_idr = GF_FALSE;
+					break;
+				case GF_VVC_NALU_SLICE_IDR_N_LP:
+					au_sap_type = GF_FILTER_SAP_1;
+					break;
+				case GF_VVC_NALU_SLICE_IDR_W_RADL:
+					au_sap_type = GF_FILTER_SAP_2;
+					slice_is_idr = GF_TRUE;
+					break;
+				}
+			} else {
+				switch (ctx->vvc_state->s_info.nal_unit_type) {
+				case GF_VVC_NALU_SLICE_IDR_N_LP:
+					au_sap_type = GF_FILTER_SAP_1;
+					slice_is_idr = GF_TRUE;
+					bIntraSlice = GF_TRUE;
+					break;
+				case GF_VVC_NALU_SLICE_CRA:
+					au_sap_type = GF_FILTER_SAP_3;
+					bIntraSlice = GF_TRUE;
+					break;
+				case GF_VVC_NALU_SLICE_IDR_W_RADL:
+					bIntraSlice = GF_TRUE;
+					if (ctx->vvc_state->s_info.gdr_pic) {
+						au_sap_type = GF_FILTER_SAP_3;
+					} else {
+						au_sap_type = GF_FILTER_SAP_1;
+						slice_is_idr = GF_TRUE;
+					}
+					break;
+				}
+			}
+
+			slice_poc = ctx->vvc_state->s_info.poc;
+
+			/*need to store TS offsets*/
+			switch (ctx->vvc_state->s_info.slice_type) {
+			case GF_AVC_TYPE_B:
+			case GF_AVC_TYPE2_B:
+				slice_is_b = GF_TRUE;
+				break;
+			}
 		} else {
 
 			/*fixme - we need finer grain for priority*/
@@ -2639,7 +3368,7 @@ naldmx_flush:
 				}
 				if (nal_type==GF_AVC_NALU_SVC_PREFIX_NALU) {
                     if (ctx->svc_prefix_buffer_size) {
-                        GF_LOG(GF_LOG_WARNING, GF_LOG_CODING, ("[%s] broken bitstream, two consecutive SVC prefix NALU without SVC slice inbetween\n", ctx->log_name));
+                        GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] broken bitstream, two consecutive SVC prefix NALU without SVC slice in-between\n", ctx->log_name));
                         ctx->svc_prefix_buffer_size = 0;
                     }
 
@@ -2647,16 +3376,16 @@ naldmx_flush:
 					ctx->svc_nalu_prefix_reserved = avc_svc_subs_reserved;
 					ctx->svc_nalu_prefix_priority = avc_svc_subs_priority;
 
-					ctx->svc_prefix_buffer_size = next;
+					ctx->svc_prefix_buffer_size = nal_size;
 					if (ctx->svc_prefix_buffer_size > ctx->svc_prefix_buffer_alloc) {
 						ctx->svc_prefix_buffer_alloc = ctx->svc_prefix_buffer_size;
 						ctx->svc_prefix_buffer = gf_realloc(ctx->svc_prefix_buffer, ctx->svc_prefix_buffer_size);
 					}
 					memcpy(ctx->svc_prefix_buffer, start+sc_size, ctx->svc_prefix_buffer_size);
 
-					assert( remain >= (s32) sc_size+next );
-					start += sc_size+next;
-					remain -= sc_size+next;
+					assert( (u32) remain >= sc_size + nal_size);
+					start += sc_size + nal_size;
+					remain -= sc_size + nal_size;
 					continue;
 				}
 			} else if (is_slice) {
@@ -2672,11 +3401,11 @@ naldmx_flush:
 				bottom_field_flag = ctx->avc_state->s_info.bottom_field_flag;
 			}
 
-			slice_is_ref = (ctx->avc_state->s_info.nal_unit_type==GF_AVC_NALU_IDR_SLICE) ? GF_TRUE : GF_FALSE;
+			slice_is_idr = (ctx->avc_state->s_info.nal_unit_type==GF_AVC_NALU_IDR_SLICE) ? GF_TRUE : GF_FALSE;
 
 			recovery_point_valid = ctx->avc_state->sei.recovery_point.valid;
 			recovery_point_frame_cnt = ctx->avc_state->sei.recovery_point.frame_cnt;
-			bIntraSlice = gf_media_avc_slice_is_intra(ctx->avc_state);
+			bIntraSlice = gf_avc_slice_is_intra(ctx->avc_state);
 
 			au_sap_type = GF_FILTER_SAP_NONE;
 			if (ctx->avc_state->s_info.nal_unit_type == GF_AVC_NALU_IDR_SLICE)
@@ -2695,8 +3424,12 @@ naldmx_flush:
 		if (is_slice) {
 			Bool first_in_au = ctx->first_slice_in_au;
 
-			if (slice_is_ref)
+			if (slice_is_idr)
 				ctx->nb_idr++;
+
+			if (au_sap_type==GF_FILTER_SAP_3)
+				ctx->nb_cra++;
+
 			slice_force_ref = GF_FALSE;
 
 			/*we only indicate TRUE IDRs for sync samples (cf AVC file format spec).
@@ -2704,8 +3437,6 @@ naldmx_flush:
 			if (ctx->first_slice_in_au) {
 				ctx->first_slice_in_au = GF_FALSE;
 				if (recovery_point_valid) {
-//					if (!ctx->is_hevc) assert(ctx->avc_state->s_info.nal_unit_type!=GF_AVC_NALU_IDR_SLICE || bIntraSlice);
-
 					ctx->sei_recovery_frame_count = recovery_point_frame_cnt;
 
 					/*we allow to mark I-frames as sync on open-GOPs (with sei_recovery_frame_count=0) when forcing sync even when the SEI RP is not available*/
@@ -2713,11 +3444,13 @@ naldmx_flush:
 						ctx->has_islice = 1;
 						if (ctx->use_opengop_gdr == 1) {
 							ctx->use_opengop_gdr = 2; /*avoid message flooding*/
-							GF_LOG(GF_LOG_WARNING, GF_LOG_CODING, ("[%s] No valid SEI Recovery Point found although needed - forcing\n", ctx->log_name));
+							GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] No valid SEI Recovery Point found although needed - forcing\n", ctx->log_name));
 						}
 					}
-					if (ctx->is_hevc) {
+					if (ctx->codecid==GF_CODECID_HEVC) {
 						ctx->hevc_state->sei.recovery_point.valid = 0;
+					} else if (ctx->codecid==GF_CODECID_VVC) {
+						ctx->vvc_state->s_info.recovery_point_valid = 0;
 					} else {
 						ctx->avc_state->sei.recovery_point.valid = 0;
 					}
@@ -2752,6 +3485,10 @@ naldmx_flush:
 
 				if ((slice_poc < 0) && !ctx->last_poc)
 					ctx->poc_diff = 0;
+				else if ((slice_poc < 0) && (-slice_poc < ctx->poc_diff)) {
+					pdiff = -slice_poc;
+					ctx->poc_diff = 0;
+				}
 
 				if (!ctx->poc_diff || (ctx->poc_diff > (s32) pdiff ) ) {
 					ctx->poc_diff = pdiff;
@@ -2762,21 +3499,39 @@ naldmx_flush:
 				}
 				ctx->last_poc = slice_poc;
 			}
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_PARSER, ("[%s] POC is %d - min poc diff %d - slice is ref %d\n", ctx->log_name, slice_poc, ctx->poc_diff, slice_is_ref));
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[%s] POC is %d - min poc diff %d - slice is IDR %d (SAP %d)\n", ctx->log_name, slice_poc, ctx->poc_diff, slice_is_idr, au_sap_type));
 
 			/*ref slice, reset poc*/
-			if (slice_is_ref) {
+			if (slice_is_idr) {
 				if (first_in_au) {
-					//two consecutive IDRs, force poc_diff to 0 to force frame dispatch
-					if (ctx->last_frame_is_idr) ctx->poc_diff=1;
+					Bool temp_poc_diff = GF_FALSE;
+					//two consecutive IDRs, force poc_diff to 1 if 0 (when we have intra-only) to force frame dispatch
+					if (ctx->last_frame_is_idr && !ctx->poc_diff) {
+						temp_poc_diff = GF_TRUE;
+						ctx->poc_diff = 1;
+					}
 					//new ref frame, dispatch all pending packets
 					naludmx_enqueue_or_dispatch(ctx, NULL, GF_TRUE);
 
-					ctx->max_last_poc = ctx->last_poc = ctx->max_last_b_poc = 0;
-					ctx->poc_shift = 0;
-					//force probing of POC diff, this will prevent dispatching frames with wrong CTS until we have a clue of min poc_diff used
-					ctx->poc_probe_done = 0;
+					//if IDR with DLP (sap2), only reset poc probing if the poc is below current max poc
+					//otherwise assume no diff in poc
+					if ((au_sap_type == GF_FILTER_SAP_2) && (ctx->max_last_poc >= ctx->last_poc) ){
+						ctx->au_sap2_poc_reset = GF_TRUE;
+					}
+
+					if ((au_sap_type == GF_FILTER_SAP_1) || ctx->au_sap2_poc_reset) {
+						if (!ctx->au_sap2_poc_reset)
+							ctx->last_poc = 0;
+
+						ctx->max_last_poc = ctx->last_poc;
+						ctx->max_last_b_poc = ctx->last_poc;
+						ctx->poc_shift = 0;
+						//force probing of POC diff, this will prevent dispatching frames with wrong CTS until we have a clue of min poc_diff used
+						ctx->poc_probe_done = 0;
+					}
 					ctx->last_frame_is_idr = GF_TRUE;
+					if (temp_poc_diff)
+						ctx->poc_diff = 0;
 				}
 			}
 			/*forced ref slice*/
@@ -2819,36 +3574,17 @@ naldmx_flush:
 				if (nal_ref_idc) {
 					ctx->has_ref_slices = GF_TRUE;
 				}
-				if (!ctx->is_hevc && (ctx->avc_state->s_info.redundant_pic_cnt) ) {
+				if ((ctx->codecid==GF_CODECID_AVC) && (ctx->avc_state->s_info.redundant_pic_cnt) ) {
 					ctx->has_redundant = GF_TRUE;
 				}
 			}
 		}
 
-		//we skipped bytes already in store + end of start code present in packet, so the size of the first object
-		//needs adjustement
-		if (nal_hdr_in_store && !next_size && !full_nal_required) {
-			size += nal_bytes_from_store;
-		}
-
-		if (! full_nal) {
-			u8 b3 = start[remain-3];
-			u8 b2 = start[remain-2];
-			u8 b1 = start[remain-1];
-
-			//we may have a startcode at the end of the packet, store it and don't dispatch the last 3 bytes !
-			if (!b1 || !b2 || !b3) {
-				copy_last_bytes = GF_TRUE;
-				assert(size >= 3);
-				size -= 3;
-				ctx->bytes_in_header = 3;
-			}
-		}
 
 		au_start = ctx->first_pck_in_au ? GF_FALSE : GF_TRUE;
 
 		if (ctx->has_initial_aud) {
-			u32 audelim_size = ctx->is_hevc ? 3 : 2;
+			u32 audelim_size = (ctx->codecid!=GF_CODECID_AVC) ? 3 : 2;
 			/*dst_pck = */naludmx_start_nalu(ctx, audelim_size, GF_FALSE, &au_start, &pck_data);
 			memcpy(pck_data + ctx->nal_length , ctx->init_aud, audelim_size);
 			ctx->has_initial_aud = GF_FALSE;
@@ -2876,79 +3612,70 @@ naldmx_flush:
 		}
 
 		//nalu size field
-		/*dst_pck = */naludmx_start_nalu(ctx, (u32) size, GF_FALSE, &au_start, &pck_data);
+		/*dst_pck = */naludmx_start_nalu(ctx, (u32) nal_size, GF_FALSE, &au_start, &pck_data);
 		pck_data += ctx->nal_length;
 
 		//add subsample info before touching the size
 		if (ctx->subsamples) {
-			naludmx_add_subsample(ctx, (u32) size, avc_svc_subs_priority, avc_svc_subs_reserved);
+			naludmx_add_subsample(ctx, (u32) nal_size, avc_svc_subs_priority, avc_svc_subs_reserved);
 		}
 
-		//bytes come from both our store and the data packet
-		if (nal_hdr_in_store) {
-			memcpy(pck_data, hdr_start, nal_bytes_from_store);
-			assert(size >= nal_bytes_from_store);
-			size -= nal_bytes_from_store;
-			if (size)
-				memcpy(pck_data + nal_bytes_from_store, pck_start, (size_t) size);
 
-			if (next_size) {
-				assert(!size);
-				memmove(ctx->hdr_store, hdr_start+nal_bytes_from_store,ctx->bytes_in_header - nal_bytes_from_store);
-				ctx->bytes_in_header -= next_size+store_sc_size;
-				continue;
-			}
-		} else {
-			//bytes only come from the data packet
-			memcpy(pck_data, pck_start, (size_t) size);
-		}
+		//bytes only come from the data packet
+		memcpy(pck_data, nal_data, (size_t) nal_size);
 
-		if (! full_nal) {
-			if (copy_last_bytes) {
-				memcpy(ctx->hdr_store, start+remain-3, 3);
-			}
-			break;
-		}
-
-		assert(remain >= size);
-		start = pck_start + size;
-        assert((u32) (start - (u8*)data) <= pck_size);
-		remain = pck_size - (u32) (start - (u8*)data);
-
+		nal_size += sc_size;
+		start += nal_size;
+		remain -= nal_size;
+		naldmx_check_timestamp_switch(ctx, &nalu_store_before, nal_size, &drop_packet, pck);
 
 		//don't demux too much of input, abort when we would block. This avoid dispatching
 		//a huge number of frames in a single call
 		if (remain && gf_filter_pid_would_block(ctx->opid)) {
-			ctx->resume_from = (u32) ((char *)start -  (char *)data);
-			if (data == ctx->hdr_store) {
-				assert(ctx->resume_from > hdr_size_at_resume);
-				ctx->resume_from -= hdr_size_at_resume;
-            } else {
-                assert(ctx->resume_from<=pck_size);
-            }
+			ctx->resume_from = (u32) (start - ctx->nal_store);
+			assert(ctx->resume_from <= ctx->nal_store_size);
+			assert(ctx->resume_from == ctx->nal_store_size - remain);
+			if (drop_packet)
+				gf_filter_pid_drop_packet(ctx->ipid);
 			return GF_OK;
 		}
 	}
+
+	if (remain) {
+		if (is_eos && (remain == ctx->nal_store_size)) {
+			GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] Incomplete last NAL and eos, discarding\n", ctx->log_name));
+			remain = 0;
+		} else {
+			assert((u32) remain<=ctx->nal_store_size);
+			memmove(ctx->nal_store, start, remain);
+		}
+	}
+	ctx->nal_store_size = remain;
+
+	if (drop_packet)
+		gf_filter_pid_drop_packet(ctx->ipid);
+
 	if (is_eos)
 		return naludmx_process(filter);
 
 	if ((ctx->nb_nalus>nalu_before) && gf_filter_reporting_enabled(filter)) {
 		char szStatus[1024];
 
-		sprintf(szStatus, "%s %dx%d % 10d NALU % 8d I % 8d P % 8d B % 8d SEI", ctx->is_hevc ? "HEVC":"AVC|H264", ctx->width, ctx->height, ctx->nb_nalus, ctx->nb_i, ctx->nb_p, ctx->nb_b, ctx->nb_sei);
+		sprintf(szStatus, "%s %dx%d % 10d NALU % 8d I % 8d P % 8d B % 8d SEI", ctx->log_name, ctx->width, ctx->height, ctx->nb_nalus, ctx->nb_i, ctx->nb_p, ctx->nb_b, ctx->nb_sei);
 		gf_filter_update_status(filter, -1, szStatus);
 	}
+	if (ctx->full_au_source && ctx->poc_probe_done) {
+		if (ctx->first_pck_in_au)
+			naludmx_finalize_au_flags(ctx);
 
-	gf_filter_pid_drop_packet(ctx->ipid);
+		naludmx_enqueue_or_dispatch(ctx, NULL, GF_TRUE);
+	}
 	return GF_OK;
 }
 
 static GF_Err naludmx_initialize(GF_Filter *filter)
 {
 	GF_NALUDmxCtx *ctx = gf_filter_get_udta(filter);
-	ctx->hdr_store_size = 0;
-	ctx->hdr_store_alloc = SAFETY_NAL_STORE;
-	ctx->hdr_store = gf_malloc(sizeof(char)*SAFETY_NAL_STORE);
 	ctx->sps = gf_list_new();
 	ctx->pps = gf_list_new();
 	switch (ctx->nal_length) {
@@ -2967,7 +3694,7 @@ static GF_Err naludmx_initialize(GF_Filter *filter)
 		ctx->nal_adjusted = GF_TRUE;
 		break;
 	default:
-		GF_LOG(GF_LOG_WARNING, GF_LOG_CODING, ("[%s] NAL size length %d is not allowed, defaulting to 4 bytes\n", ctx->log_name));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[%s] NAL size length %d is not allowed, defaulting to 4 bytes\n", ctx->log_name));
 		ctx->max_nalu_size_allowed = 0xFFFFFFFF;
 		ctx->nal_length = 4;
 		break;
@@ -2975,15 +3702,17 @@ static GF_Err naludmx_initialize(GF_Filter *filter)
 	return GF_OK;
 }
 
-static void naludmx_del_param_list(GF_List *ps)
+static void naludmx_del_param_list(GF_List *ps, Bool do_free)
 {
 	if (!ps) return;
 	while (gf_list_count(ps)) {
-		GF_AVCConfigSlot *sl = gf_list_pop_back(ps);
+		GF_NALUFFParam *sl = gf_list_pop_back(ps);
 		if (sl->data) gf_free(sl->data);
 		gf_free(sl);
 	}
-	gf_list_del(ps);
+
+	if (do_free)
+		gf_list_del(ps);
 }
 
 static void naludmx_log_stats(GF_NALUDmxCtx *ctx)
@@ -2994,47 +3723,61 @@ static void naludmx_log_stats(GF_NALUDmxCtx *ctx)
 	if (ctx->cur_fps.den)
 		nb_frames = (u32) (ctx->dts / ctx->cur_fps.den);
 
-	if (ctx->idur.den && ctx->idur.num) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("%s duration specified at import time, may have parsed more frames than imported\n", ctx->log_name));
+	if (ctx->dur.den && ctx->dur.num) {
+		GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s duration specified at import time, may have parsed more frames than imported\n", ctx->log_name));
 		msg_import = "parsed";
 	} else {
 		msg_import = "Import results:";
 	}
 
 	if (ctx->nb_si || ctx->nb_sp) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("%s %s %d frames (%d NALUs) - Slices: %d I %d P %d B %d SP %d SI - %d SEI - %d IDR\n", ctx->log_name, msg_import, nb_frames, ctx->nb_nalus, ctx->nb_i, ctx->nb_p, ctx->nb_b, ctx->nb_sp, ctx->nb_si, ctx->nb_sei, ctx->nb_idr ));
+		GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s %s %d frames (%d NALUs) - Slices: %d I %d P %d B %d SP %d SI - %d SEI - %d IDR\n", ctx->log_name, msg_import, nb_frames, ctx->nb_nalus, ctx->nb_i, ctx->nb_p, ctx->nb_b, ctx->nb_sp, ctx->nb_si, ctx->nb_sei, ctx->nb_idr ));
+	} else if (ctx->vvc_no_stats) {
+		GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s %s %d samples (%d NALUs) - %d SEI - %d IDR - %d CRA\n",
+			                  ctx->log_name, msg_import, nb_frames, ctx->nb_nalus, ctx->nb_sei, ctx->nb_idr, ctx->nb_cra));
 	} else {
-		GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("%s %s %d samples (%d NALUs) - Slices: %d I %d P %d B - %d SEI - %d IDR\n",
-			                  ctx->log_name, msg_import, nb_frames, ctx->nb_nalus, ctx->nb_i, ctx->nb_p, ctx->nb_b, ctx->nb_sei, ctx->nb_idr));
+		GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s %s %d samples (%d NALUs) - Slices: %d I %d P %d B - %d SEI - %d IDR - %d CRA\n",
+			                  ctx->log_name, msg_import, nb_frames, ctx->nb_nalus, ctx->nb_i, ctx->nb_p, ctx->nb_b, ctx->nb_sei, ctx->nb_idr, ctx->nb_cra));
 	}
 
-	if (!ctx->is_hevc) {
+	if (ctx->codecid==GF_CODECID_AVC) {
 		count = gf_list_count(ctx->sps);
 		for (i=0; i<count; i++) {
 			AVC_SPS *sps;
-			GF_AVCConfigSlot *svcc = (GF_AVCConfigSlot*)gf_list_get(ctx->sps, i);
+			GF_NALUFFParam *svcc = (GF_NALUFFParam*)gf_list_get(ctx->sps, i);
 			sps = & ctx->avc_state->sps[svcc->id];
 			if (sps->nb_ei || sps->nb_ep) {
-				GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("%s SVC (SSPS ID %d, %dx%d) %s Slices: %d I %d P %d B\n", ctx->log_name, svcc->id - GF_SVC_SSPS_ID_SHIFT, sps->width, sps->height, msg_import, sps->nb_ei, sps->nb_ep, sps->nb_eb ));
+				GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s SVC (SSPS ID %d, %dx%d) %s Slices: %d I %d P %d B\n", ctx->log_name, svcc->id - GF_SVC_SSPS_ID_SHIFT, sps->width, sps->height, msg_import, sps->nb_ei, sps->nb_ep, sps->nb_eb ));
 			}
 		}
 	} else if (ctx->nb_e_i || ctx->nb_e_p || ctx->nb_e_b) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("%s L-HEVC %s Slices: %d I %d P %d B\n", ctx->log_name, msg_import, ctx->nb_e_i, ctx->nb_e_p, ctx->nb_e_b ));
+		GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s L-HEVC %s Slices: %d I %d P %d B\n", ctx->log_name, msg_import, ctx->nb_e_i, ctx->nb_e_p, ctx->nb_e_b ));
 	}
 
 	if (ctx->max_total_delay>1) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("%s Stream uses forward prediction - stream CTS offset: %d frames\n", ctx->log_name, ctx->max_total_delay));
+		GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s Stream uses forward prediction - stream CTS offset: %d frames\n", ctx->log_name, ctx->max_total_delay));
 	}
 
 	if (!ctx->nal_adjusted) {
 		if ((ctx->max_nalu_size < 0xFF) && (ctx->nal_length>1) ){
-			GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("%s Max NALU size is %d - stream could be optimized by setting nal_length=1\n", ctx->log_name, ctx->max_nalu_size));
+			GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s Max NALU size is %d - stream could be optimized by setting nal_length=1\n", ctx->log_name, ctx->max_nalu_size));
 		} else if ((ctx->max_nalu_size < 0xFFFF) && (ctx->nal_length>2) ){
-			GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("%s Max NALU size is %d - stream could be optimized by setting nal_length=2\n", ctx->log_name, ctx->max_nalu_size));
+			GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("%s Max NALU size is %d - stream could be optimized by setting nal_length=2\n", ctx->log_name, ctx->max_nalu_size));
 		}
 	}
 }
 
+static void naludmx_reset_param_sets(GF_NALUDmxCtx *ctx, Bool do_free)
+{
+	naludmx_del_param_list(ctx->sps, do_free);
+	naludmx_del_param_list(ctx->pps, do_free);
+	naludmx_del_param_list(ctx->vps, do_free);
+	naludmx_del_param_list(ctx->sps_ext, do_free);
+	naludmx_del_param_list(ctx->pps_svc, do_free);
+	naludmx_del_param_list(ctx->vvc_aps_pre, do_free);
+	naludmx_del_param_list(ctx->vvc_dci, do_free);
+
+}
 static void naludmx_finalize(GF_Filter *filter)
 {
 	GF_NALUDmxCtx *ctx = gf_filter_get_udta(filter);
@@ -3044,7 +3787,7 @@ static void naludmx_finalize(GF_Filter *filter)
 	if (ctx->bs_r) gf_bs_del(ctx->bs_r);
 	if (ctx->bs_w) gf_bs_del(ctx->bs_w);
 	if (ctx->indexes) gf_free(ctx->indexes);
-	if (ctx->hdr_store) gf_free(ctx->hdr_store);
+	if (ctx->nal_store) gf_free(ctx->nal_store);
 	if (ctx->pck_queue) {
 		while (gf_list_count(ctx->pck_queue)) {
 			GF_FilterPacket *pck = gf_list_pop_back(ctx->pck_queue);
@@ -3056,14 +3799,14 @@ static void naludmx_finalize(GF_Filter *filter)
 	if (ctx->svc_prefix_buffer) gf_free(ctx->svc_prefix_buffer);
 	if (ctx->subsamp_buffer) gf_free(ctx->subsamp_buffer);
 
-	naludmx_del_param_list(ctx->sps);
-	naludmx_del_param_list(ctx->pps);
-	naludmx_del_param_list(ctx->vps);
-	naludmx_del_param_list(ctx->sps_ext);
-	naludmx_del_param_list(ctx->pps_svc);
+	if (ctx->src_pck) gf_filter_pck_unref(ctx->src_pck);
+	ctx->src_pck = NULL;
+
+	naludmx_reset_param_sets(ctx, GF_TRUE);
 
 	if (ctx->avc_state) gf_free(ctx->avc_state);
 	if (ctx->hevc_state) gf_free(ctx->hevc_state);
+	if (ctx->vvc_state) gf_free(ctx->vvc_state);
 }
 
 
@@ -3072,17 +3815,21 @@ static const char *naludmx_probe_data(const u8 *data, u32 size, GF_FilterProbeSc
 	u32 sc, sc_size;
 	u32 not_hevc=0;
 	u32 not_avc=0;
+	u32 not_vvc=0;
 	u32 nb_hevc=0;
 	u32 nb_avc=0;
+	u32 nb_vvc=0;
 	u32 nb_nalus=0;
 	u32 nb_hevc_zero=0;
 	u32 nb_avc_zero=0;
+	u32 nb_vvc_zero=0;
 	u32 nb_sps_hevc=0,nb_pps_hevc=0,nb_vps_hevc=0;
 	u32 nb_sps_avc=0,nb_pps_avc=0;
+	u32 nb_sps_vvc=0,nb_pps_vvc=0,nb_vps_vvc=0;
 
-	while (size) {
-		u32 avc_type=0;
-		u32 hevc_type=0;
+	while (size>3) {
+		u32 nal_type=0;
+		sc_size = 0;
 		sc = gf_media_nalu_next_start_code(data, size, &sc_size);
 		if (!sc_size) break;
 
@@ -3090,14 +3837,21 @@ static const char *naludmx_probe_data(const u8 *data, u32 size, GF_FilterProbeSc
 		if (size <= sc + sc_size) break;
 		size -= sc + sc_size;
 
+		if (data[0] & 0x80) {
+			not_avc++;
+			not_hevc++;
+			not_vvc++;
+			continue;
+		}
 		nb_nalus++;
 
-		hevc_type = (data[0] & 0x7E) >> 1;
-		if (hevc_type<=40) {
+		nal_type = (data[0] & 0x7E) >> 1;
+		if (nal_type<=40) {
 			nb_hevc++;
-			switch (hevc_type) {
+			switch (nal_type) {
 			case GF_HEVC_NALU_PIC_PARAM:
-				nb_pps_hevc++;
+				if (nb_sps_hevc)
+					nb_pps_hevc++;
 				break;
 			case GF_HEVC_NALU_SEQ_PARAM:
 				nb_sps_hevc++;
@@ -3110,15 +3864,17 @@ static const char *naludmx_probe_data(const u8 *data, u32 size, GF_FilterProbeSc
 				break;
 			}
 		} else {
-			not_hevc++;
+			if ((nal_type!=GF_HEVC_NALU_DV_RPU) && (nal_type!=GF_HEVC_NALU_DV_EL))
+				not_hevc++;
 		}
 
-		avc_type = data[0] & 0x1F;
-		if (avc_type && avc_type<=24) {
+		nal_type = data[0] & 0x1F;
+		if (nal_type && nal_type<=24) {
 			nb_avc++;
-			switch (avc_type) {
+			switch (nal_type) {
 			case GF_AVC_NALU_PIC_PARAM:
-				nb_pps_avc++;
+				if (nb_sps_avc)
+					nb_pps_avc++;
 				break;
 			case GF_AVC_NALU_SEQ_PARAM:
 				nb_sps_avc++;
@@ -3128,68 +3884,143 @@ static const char *naludmx_probe_data(const u8 *data, u32 size, GF_FilterProbeSc
 				break;
 			}
 		} else {
-			not_avc++;
+			if ((nal_type!=GF_AVC_NALU_DV_RPU) && (nal_type!=GF_AVC_NALU_DV_EL))
+				not_avc++;
+		}
+
+		//check vvc - 2nd bit reserved to 0
+		if (data[0] & 0x40) {
+			not_vvc++;
+			continue;
+		}
+		nal_type = data[1] >> 3;
+		if (nal_type>31) {
+			not_vvc++;
+			continue;
+		}
+		nb_vvc++;
+		switch (nal_type) {
+		case GF_VVC_NALU_PIC_PARAM:
+			if (nb_sps_vvc)
+				nb_pps_vvc++;
+			break;
+		case GF_VVC_NALU_SEQ_PARAM:
+			nb_sps_vvc++;
+			break;
+		case GF_VVC_NALU_VID_PARAM:
+			nb_vps_vvc++;
+			break;
+		case GF_VVC_NALU_ACCESS_UNIT:
+			//to detect files without VPS correctly
+			nb_vps_vvc++;
+			break;
+		case 0:
+			nb_vvc_zero++;
+			break;
 		}
 	}
+
 	if (!nb_sps_avc || !nb_pps_avc) nb_avc=0;
 	if (!nb_sps_hevc || !nb_pps_hevc || !nb_vps_hevc) nb_hevc=0;
+	if (!nb_sps_vvc || !nb_pps_vvc || !nb_vps_vvc) nb_vvc=0;
 	if (not_avc) nb_avc=0;
 	if (not_hevc) nb_hevc=0;
+	if (not_vvc) nb_vvc=0;
 
-	if (not_avc && not_hevc) return NULL;
+	if (not_avc && not_hevc && not_vvc) return NULL;
 	if (nb_avc==nb_avc_zero) nb_avc=0;
 	if (nb_hevc==nb_hevc_zero) nb_hevc=0;
+	if (nb_vvc==nb_vvc_zero) nb_vvc=0;
 
-	if (!nb_hevc && !nb_avc) return NULL;
+	if (!nb_hevc && !nb_avc && !nb_vvc) return NULL;
 	*score = GF_FPROBE_SUPPORTED;
-	if (!nb_hevc) return "video/avc";
-	if (!nb_avc) return "video/hevc";
-	if (nb_hevc>nb_avc) return "video/hevc";
+	if (!nb_hevc) return (nb_vvc>nb_avc) ? "video/vvc" : "video/avc";
+	if (!nb_avc) return (nb_vvc>nb_hevc) ? "video/vvc" : "video/hevc";
+	if (!nb_vvc) return (nb_avc>nb_hevc) ? "video/avc" : "video/hevc";
+
+	if ((nb_hevc>nb_avc) && (nb_hevc>nb_vvc)) return "video/hevc";
+	if ((nb_vvc>nb_avc) && (nb_vvc>nb_hevc)) return "video/vvc";
 	return "video/avc";
 }
 
 static const GF_FilterCapability NALUDmxCaps[] =
 {
 	CAP_UINT(GF_CAPS_INPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
-	CAP_STRING(GF_CAPS_INPUT, GF_PROP_PID_FILE_EXT, "264|h264|26L|h26L|h26l|avc|svc|mvc|hevc|hvc|265|h265|shvc|lvhc|mhvc"),
-	CAP_STRING(GF_CAPS_INPUT, GF_PROP_PID_MIME, "video/avc|video/h264|video/svc|video/mvc|video/hevc|video/lhvc|video/shvc|video/mhvc"),
-	CAP_UINT(GF_CAPS_OUTPUT_STATIC, GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
+	CAP_STRING(GF_CAPS_INPUT, GF_PROP_PID_FILE_EXT, "264|h264|26L|h26L|h26l|avc|svc|mvc|hevc|hvc|265|h265|shvc|lvhc|mhvc|266|vvc|lvvc"),
+	CAP_STRING(GF_CAPS_INPUT, GF_PROP_PID_MIME, "video/avc|video/h264|video/svc|video/mvc|video/hevc|video/lhvc|video/shvc|video/mhvc|video/vvc"),
+	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
 	CAP_UINT(GF_CAPS_OUTPUT_STATIC, GF_PROP_PID_CODECID, GF_CODECID_AVC),
 	CAP_UINT(GF_CAPS_OUTPUT_STATIC, GF_PROP_PID_CODECID, GF_CODECID_AVC_PS),
 	CAP_UINT(GF_CAPS_OUTPUT_STATIC, GF_PROP_PID_CODECID, GF_CODECID_SVC),
 	CAP_UINT(GF_CAPS_OUTPUT_STATIC, GF_PROP_PID_CODECID, GF_CODECID_MVC),
 	CAP_UINT(GF_CAPS_OUTPUT_STATIC, GF_PROP_PID_CODECID, GF_CODECID_HEVC),
 	CAP_UINT(GF_CAPS_OUTPUT_STATIC, GF_PROP_PID_CODECID, GF_CODECID_LHVC),
+	CAP_UINT(GF_CAPS_OUTPUT_STATIC, GF_PROP_PID_CODECID, GF_CODECID_VVC),
 	CAP_BOOL(GF_CAPS_OUTPUT_STATIC_EXCLUDED, GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_BOOL(GF_CAPS_OUTPUT_STATIC_EXCLUDED, GF_PROP_PID_TILE_BASE, GF_TRUE),
 	{0},
-	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
+	CAP_UINT(GF_CAPS_INPUT_OUTPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_AVC),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_AVC_PS),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_SVC),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MVC),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_HEVC),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_LHVC),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_VVC),
 	CAP_BOOL(GF_CAPS_INPUT,GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_BOOL(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_TILE_BASE, GF_TRUE),
+	{0},
+	//for HLS-SAES
+	CAP_UINT(GF_CAPS_INPUT_OUTPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_ENCRYPTED),
+	CAP_4CC(GF_CAPS_INPUT,GF_PROP_PID_PROTECTION_SCHEME_TYPE, GF_HLS_SAMPLE_AES_SCHEME),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_AVC),
+	CAP_BOOL(GF_CAPS_INPUT,GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_BOOL(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_TILE_BASE, GF_TRUE),
 };
 
 #define OFFS(_n)	#_n, offsetof(GF_NALUDmxCtx, _n)
 static const GF_FilterArgs NALUDmxArgs[] =
 {
 	{ OFFS(fps), "import frame rate (0 default to FPS from bitstream or 25 Hz)", GF_PROP_FRACTION, "0/1000", NULL, 0},
-	{ OFFS(index), "indexing window length. If 0, bitstream is not probed for duration. A negative value skips the indexing if the source file is larger than 100M (slows down importers) unless a play with start range > 0 is issued, otherwise uses the positive value", GF_PROP_DOUBLE, "-1.0", NULL, 0},
+	{ OFFS(index), "indexing window length. If 0, bitstream is not probed for duration. A negative value skips the indexing if the source file is larger than 100M (slows down importers) unless a play with start range > 0 is issued", GF_PROP_DOUBLE, "-1.0", NULL, 0},
 	{ OFFS(explicit), "use explicit layered (SVC/LHVC) import", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(strict_poc), "delay frame output of an entire GOP to ensure CTS info is correct when POC suddenly changes", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(strict_poc), "delay frame output of an entire GOP to ensure CTS info is correct when POC suddenly changes\n"
+		"- off: disable GOP buffering\n"
+		"- on: enable GOP buffering, assuming no error in POC\n"
+		"- error: enable GOP buffering and try to detect lost frames", GF_PROP_UINT, "off", "off|on|error", GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(nosei), "remove all sei messages", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(nosvc), "remove all SVC/MVC/LHVC data", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(novpsext), "remove all VPS extensions", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(importer), "compatibility with old importer, displays import results", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(idur), "compatibility with old importer to log imported frames only", GF_PROP_FRACTION, "0", NULL, GF_FS_ARG_HINT_HIDE},
+	{ OFFS(dur), "compatibility with old importer to log imported frames only", GF_PROP_FRACTION, "0", NULL, GF_FS_ARG_HINT_HIDE},
 	{ OFFS(nal_length), "set number of bytes used to code length field: 1, 2 or 4", GF_PROP_UINT, "4", NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(subsamples), "import subsamples information", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_EXPERT},
-	{ OFFS(deps), "import samples dependencies information", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(deps), "import sample dependency information", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(seirw), "rewrite AVC sei messages for ISOBMFF constraints", GF_PROP_BOOL, "true", NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(audelim), "keep Access Unit delimiter in payload", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_EXPERT},
-	{ OFFS(analyze), "skip reformat of decoder config and SEI and dispatch all NAL in input order - shall only be used with inspect filter analyze mode!", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_HIDE},
+	{ OFFS(analyze), "skip reformat of decoder config and SEI and dispatch all NAL in input order - shall only be used with inspect filter analyze mode!", GF_PROP_UINT, "off", "off|on|bs|full", GF_FS_ARG_HINT_HIDE},
+	{ OFFS(notime), "ignore input timestamps, rebuild from 0", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
+
+	{ OFFS(dv_mode), "signaling for DolbyVision\n"
+	"- none: never signal DV profile\n"
+	"- auto: signal DV profile if RPU or EL are found\n"
+	"- force: always signal DV profile\n"
+	"- clean: do not signal and remove RPU and EL NAL units\n"
+	"- single: remove EL NAL units"
+	, GF_PROP_UINT, "auto", "none|auto|force|clean|single", GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(dv_profile), "profile for DolbyVision (currently defined profiles are 4, 5, 7, 8, 9)", GF_PROP_UINT, "5", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(dv_compatid), "cross-compatibility ID for DolbyVision\n"
+		"- none: do not signal compatibility\n"
+		"- hdr10: CTA HDR10, as specified by EBU TR 03\n"
+		"- bt709: SDR BT.709\n"
+		"- hlg709: HLG BT.709 gamut in ITU-R BT.2020\n"
+		"- hlg2100: HLG BT.2100 gamut in ITU-R BT.2020\n"
+		"- bt2020: SDR BT.2020\n"
+		"- brd: Ultra HD Blu-ray Disc HDR", GF_PROP_UINT, "none", "none|hdr10|bt709|hlg709|hlg2100|bt2020|brd", GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(bsdbg), "debug NAL parsing in `parser@debug` logs\n"
+		"- off: not enabled\n"
+		"- on: enabled\n"
+		"- full: enable with number of bits dumped", GF_PROP_UINT, "off", "off|on|full", GF_FS_ARG_HINT_EXPERT},
 	{0}
 };
 
@@ -3198,7 +4029,8 @@ GF_FilterRegister NALUDmxRegister = {
 	.name = "rfnalu",
 	GF_FS_SET_DESCRIPTION("AVC/HEVC reframer")
 	GF_FS_SET_HELP("This filter parses AVC|H264 and HEVC files/data and outputs corresponding video PID and frames.\n"
-	"This demuxer only produces ISOBMFF-compatible output: start codes are removed, NALU length field added and avcC/hvcC config created.\nNote: The demux uses negative CTS offsets: CTS is corrrect, but some frames may have DTS greater than CTS.")
+	"This filter produces ISOBMFF-compatible output: start codes are removed, NALU length field added and avcC/hvcC config created.\n"
+	"Note: The filter uses negative CTS offsets: CTS is correct, but some frames may have DTS greater than CTS.")
 	.private_size = sizeof(GF_NALUDmxCtx),
 	.args = NALUDmxArgs,
 	.initialize = naludmx_initialize,

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2018
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -96,16 +96,12 @@ GF_Err gf_sc_texture_play_from_to(GF_TextureHandler *txh, MFURL *url, Double sta
 		if (e != GF_OK) return e;
 	}
 	txh->is_open = 1;
-
+	txh->stream_finished = GF_FALSE;
 	/*request play*/
 	gf_mo_play(txh->stream, start_offset, end_offset, can_loop);
 
 	txh->last_frame_time = (u32) (-1);
 
-	//we need to rework the raw memory stuff to be transparent
-#ifdef FILTER_FIXME
-	txh->raw_memory = GF_FALSE;
-#endif
 	/*request play*/
 	return GF_OK;
 }
@@ -129,7 +125,7 @@ GF_EXPORT
 void gf_sc_texture_stop_no_unregister(GF_TextureHandler *txh)
 {
 	if (!txh->is_open) return;
-	/*release texture WITHOUT droping frame*/
+	/*release texture WITHOUT dropping frame*/
 	if (txh->needs_release) {
 		gf_mo_release_data(txh->stream, 0xFFFFFFFF, 1);
 		txh->needs_release = 0;
@@ -147,7 +143,7 @@ GF_EXPORT
 void gf_sc_texture_stop(GF_TextureHandler *txh)
 {
 	if (!txh->is_open) return;
-	/*release texture WITHOUT droping frame*/
+	/*release texture WITHOUT dropping frame*/
 	if (txh->needs_release) {
 		gf_mo_release_data(txh->stream, 0xFFFFFFFF, -1);
 		txh->needs_release = 0;
@@ -157,6 +153,7 @@ void gf_sc_texture_stop(GF_TextureHandler *txh)
 	gf_mo_stop(&txh->stream);
 	if (!txh->stream) {
 		txh->data = NULL;
+		txh->frame_ifce = NULL;
 	}
 	txh->is_open = 0;
 
@@ -170,7 +167,7 @@ void gf_sc_texture_restart(GF_TextureHandler *txh)
 {
 	if (!txh->is_open) return;
 	gf_sc_texture_release_stream(txh);
-	txh->stream_finished = 0;
+	txh->stream_finished = GF_FALSE;
 	gf_mo_restart(txh->stream);
 }
 
@@ -216,10 +213,12 @@ void gf_sc_texture_update_frame(GF_TextureHandler *txh, Bool disable_resync)
 
 	if (!txh->stream) {
 		txh->data = NULL;
+		txh->frame_ifce = NULL;
 		return;
 	}
 	if (txh->stream->config_changed) {
 		txh->data = NULL;
+		txh->frame_ifce = NULL;
 	}
 
 	/*already refreshed*/
@@ -242,7 +241,6 @@ void gf_sc_texture_update_frame(GF_TextureHandler *txh, Bool disable_resync)
 	}
 	//if first frame use 20ms as upload time
 	push_time = txh->nb_frames ? txh->upload_time/txh->nb_frames : 20;
-	
 	txh->data = gf_mo_fetch_data(txh->stream, disable_resync ? GF_MO_FETCH : GF_MO_FETCH_RESYNC, push_time, &txh->stream_finished, &ts, &size, &ms_until_pres, &ms_until_next, &txh->frame_ifce, NULL);
 
 	if (txh->stream->config_changed) {
@@ -250,7 +248,7 @@ void gf_sc_texture_update_frame(GF_TextureHandler *txh, Bool disable_resync)
 	} else if (txh->data && size && txh->size && (size != txh->size)) {
 		needs_reload = 1;
 	}
-	
+
 	if (needs_reload) {
 		/*if we had a texture this means the object has changed - delete texture and resetup. Do not skip
 		texture update as this may lead to an empty rendering pass (blank frame for this object), especially in DASH*/
@@ -264,15 +262,28 @@ void gf_sc_texture_update_frame(GF_TextureHandler *txh, Bool disable_resync)
 
 	/*if no frame or muted don't draw*/
 	if (!txh->data && !txh->frame_ifce) {
-		GF_LOG(txh->stream->connect_failure ? GF_LOG_DEBUG : GF_LOG_INFO, GF_LOG_COMPOSE, ("[Texture %p] No output frame available \n", txh));
+		GF_LOG(txh->stream->connect_state ? GF_LOG_DEBUG : GF_LOG_INFO, GF_LOG_COMPOSE, ("[Texture %p] No output frame available \n", txh));
 
 		if (txh->compositor->use_step_mode || !txh->compositor->player) {
-			if (!txh->stream->connect_failure && ((s32)txh->last_frame_time<0) ) {
-				if (!txh->probe_time_ms) txh->probe_time_ms = gf_sys_clock();
-				else if (gf_sys_clock() - txh->probe_time_ms > txh->compositor->timeout / 2) {
-					GF_LOG(GF_LOG_WARNING, GF_LOG_COMPOSE, ("[Texture %p] No output frame in %d ms, considering stream not available\n", txh, txh->compositor->timeout / 2));
-					txh->stream->connect_failure = GF_TRUE;
-					gf_sc_texture_stop_no_unregister(txh);
+			if (!txh->stream->connect_state && ((s32)txh->last_frame_time<0) ) {
+				//if we have anything bending in the source graph, reset timeout
+				//typical use case: a filter aggregates packets for a long time before dispatching
+				//example: tileagg+dash (cf issue #1934)
+				//warning, mo->odm can be null at this point (bifs & co)
+				u64 buffered = 0;
+				if (txh->stream->odm && txh->stream->odm->pid) {
+					buffered = gf_filter_pid_query_buffer_duration(txh->stream->odm->pid, GF_FALSE);
+					if (buffered) txh->stream->connect_state = MO_CONNECT_BUFFERING;
+				}
+
+				if (txh->compositor->timeout) {
+					if (buffered || !txh->probe_time_ms) {
+						txh->probe_time_ms = gf_sys_clock();
+					} else if (gf_sys_clock() - txh->probe_time_ms > txh->compositor->timeout) {
+						GF_LOG(GF_LOG_WARNING, GF_LOG_COMPOSE, ("[Texture %p] No output frame in %d ms, considering stream not available\n", txh, txh->compositor->timeout));
+						txh->stream->connect_state = MO_CONNECT_TIMEOUT;
+						gf_sc_texture_stop_no_unregister(txh);
+					}
 				}
 				txh->compositor->ms_until_next_frame = -1;
 			}
@@ -299,8 +310,8 @@ void gf_sc_texture_update_frame(GF_TextureHandler *txh, Bool disable_resync)
 		}
 		return;
 	}
-	GF_LOG(GF_LOG_INFO, GF_LOG_SYNC, ("[Texture %p] Updated new frame at clock time %d (%d ms) time %u ms\n", txh, gf_clock_time(txh->stream->odm->ck), gf_sys_clock(), ts));
-	txh->stream_finished = 0;
+	GF_LOG(GF_LOG_INFO, GF_LOG_COMPTIME, ("[Texture %p] Updated new frame at clock time %u (%u ms) time %u ms\n", txh, gf_clock_time(txh->stream->odm->ck), gf_sys_clock(), ts));
+	txh->stream_finished = GF_FALSE;
 	txh->needs_release = 1;
 	txh->last_frame_time = ts;
 	txh->size = size;

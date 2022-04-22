@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2017
+ *			Copyright (c) Telecom ParisTech 2005-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / SAF demuxer filter
@@ -147,8 +147,10 @@ static void safdmx_demux(GF_Filter *filter, GF_SAFDmxCtx *ctx, char *data, u32 d
 				gf_filter_pid_set_property(st->opid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(stype));
 				st->ts_res = gf_bs_read_u24(bs);
 				gf_filter_pid_set_property(st->opid, GF_PROP_PID_TIMESCALE, &PROP_UINT(st->ts_res));
-				if (ctx->duration.num)
+				if (ctx->duration.num) {
 					gf_filter_pid_set_property(st->opid, GF_PROP_PID_DURATION, & PROP_FRAC64(ctx->duration));
+					gf_filter_pid_set_property(st->opid, GF_PROP_PID_PLAYBACK_MODE, &PROP_UINT(GF_PLAYBACK_MODE_FASTFORWARD ) );
+				}
 
 				/*bufferSizeDB = */gf_bs_read_u16(bs);
 				au_size -= 7;
@@ -179,18 +181,20 @@ static void safdmx_demux(GF_Filter *filter, GF_SAFDmxCtx *ctx, char *data, u32 d
 				u8 *pck_data;
 				bs_pos = gf_bs_get_position(bs);
 				pck = gf_filter_pck_new_alloc(st->opid, au_size, &pck_data);
-				memcpy(pck_data, ctx->saf_data+bs_pos, au_size);
-				//TODO: map byte range pos ?
-				//TODO: map AU SN  ?
+				if (pck) {
+					memcpy(pck_data, ctx->saf_data+bs_pos, au_size);
+					//TODO: map byte range pos ?
+					//TODO: map AU SN  ?
 
-				gf_filter_pck_set_cts(pck, cts);
-				if (is_rap)
-					gf_filter_pck_set_sap(pck, GF_FILTER_SAP_1);
+					gf_filter_pck_set_cts(pck, cts);
+					if (is_rap)
+						gf_filter_pck_set_sap(pck, GF_FILTER_SAP_1);
 
-				if (ctx->start_range && (ctx->start_range * st->ts_res > cts*1000)) {
-					gf_filter_pck_set_seek_flag(pck, GF_TRUE);
+					if (ctx->start_range && (ctx->start_range * st->ts_res > cts*1000)) {
+						gf_filter_pck_set_seek_flag(pck, GF_TRUE);
+					}
+					gf_filter_pck_send(pck);
 				}
-				gf_filter_pck_send(pck);
 			}
 			gf_bs_skip_bytes(bs, au_size);
 			break;
@@ -246,8 +250,10 @@ static void safdmx_check_dur(GF_SAFDmxCtx *ctx)
 	if (!ctx->file_loaded) return;
 
 	stream = gf_fopen(p->value.string, "rb");
-	if (!stream) return;
-
+	if (!stream) {
+		ctx->duration.num=1;
+		return;
+	}
 	bs = gf_bs_from_file(stream, GF_BITSTREAM_READ);
 	ctx->file_size = gf_bs_get_size(bs);
 
@@ -445,7 +451,7 @@ static const GF_FilterCapability SAFDmxCaps[] =
 
 GF_FilterRegister SAFDmxRegister = {
 	.name = "safdmx",
-	GF_FS_SET_DESCRIPTION("SAF demuxer")
+	GF_FS_SET_DESCRIPTION("SAF demultiplexer")
 	GF_FS_SET_HELP("This filter demultiplexes SAF (MPEG-4 Simple Aggregation Format for LASeR) files/data into a set of media PIDs and frames.")
 	.private_size = sizeof(GF_SAFDmxCtx),
 	.initialize = safdmx_initialize,

@@ -2,7 +2,7 @@
 *			GPAC - Multimedia Framework C SDK
 *
 *			Authors: Jean Le Feuvre - Romain Bouqueau
-*			Copyright (c) Telecom ParisTech 2000-2020
+*			Copyright (c) Telecom ParisTech 2000-2022
 *					All rights reserved
 *
 *  This file is part of GPAC / SDL audio and video module
@@ -731,8 +731,10 @@ static Bool SDLVid_InitializeWindow(SDLVidCtx *ctx, GF_VideoOutput *dr)
 
 #if SDL_VERSION_ATLEAST(1, 2, 10)
 	vinf = SDL_GetVideoInfo();
-	dr->max_screen_width = vinf->current_w;
-	dr->max_screen_height = vinf->current_h;
+	if (vinf) {
+		dr->max_screen_width = vinf->current_w;
+		dr->max_screen_height = vinf->current_h;
+	}
 	dr->max_screen_bpp = 8;
 #else
 	{
@@ -1553,7 +1555,7 @@ static GF_Err SDLVid_ProcessEvent(GF_VideoOutput *dr, GF_Event *evt)
 	break;
 	case GF_EVENT_SHOWHIDE:
 		/*the only way to have proper show/hide with SDL is to shutdown the video system and reset it up
-		which we don't want to do since the setup MUST occur in the rendering thread for some configs (openGL)*/
+		which we don't want to do since the setup MUST occur in the rendering thread for some configs (OpenGL)*/
 		return GF_NOT_SUPPORTED;
 	case GF_EVENT_SIZE:
 	{
@@ -1776,8 +1778,11 @@ static GF_Err SDL_Blit(GF_VideoOutput *dr, GF_VideoSurface *video_src, GF_Window
 		break;
 	case GF_PIXEL_YUV:
 		pool = &ctx->pool_yuv;
-		format=SDL_PIXELFORMAT_YV12;
 		format=SDL_PIXELFORMAT_IYUV;
+		break;
+	case GF_PIXEL_YVU:
+		pool = &ctx->pool_yuv;
+		format=SDL_PIXELFORMAT_YV12;
 		break;
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV444:

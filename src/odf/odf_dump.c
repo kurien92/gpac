@@ -800,6 +800,7 @@ GF_Err gf_odf_dump_txtcfg(GF_TextConfig *desc, FILE *trace, u32 indent, Bool XMT
 		if (sd->default_style.style_flags & GF_TXT_STYLE_BOLD) strcat(szStyles, "bold ");
 		if (sd->default_style.style_flags & GF_TXT_STYLE_ITALIC) strcat(szStyles, "italic ");
 		if (sd->default_style.style_flags & GF_TXT_STYLE_UNDERLINED) strcat(szStyles, "underlined ");
+		if (sd->default_style.style_flags & GF_TXT_STYLE_STRIKETHROUGH) strcat(szStyles, "strikethrough ");
 		if (strlen(szStyles)) DumpString(trace, "style_flag", szStyles, indent, XMTDump);
 
 		for (j=0; j<sd->font_count; j++) {
@@ -873,7 +874,7 @@ GF_Err gf_odf_dump_ui_cfg(GF_UIConfig *uid, FILE *trace, u32 indent, Bool XMTDum
 
 GF_Err DumpRawUIConfig(GF_DefaultDescriptor *dsi, FILE *trace, u32 indent, Bool XMTDump, u32 oti)
 {
-	char devName[255];
+	char devName[256];
 	u32 i;
 	u64 len;
 	GF_BitStream *bs;

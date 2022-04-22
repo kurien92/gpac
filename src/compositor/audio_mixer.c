@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2018
+ *			Copyright (c) Telecom ParisTech 2000-2021
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -29,7 +29,7 @@
 	Notes about the mixer:
 	1- spatialization is out of scope for the mixer (eg that's the sound node responsability)
 	2- mixing is performed by resampling input source & deinterleaving its channels into dedicated buffer.
-	We could directly deinterleave in the main mixer ouput buffer, but this would prevent any future
+	We could directly deinterleave in the main mixer output buffer, but this would prevent any future
 	gain correction.
 */
 typedef struct
@@ -46,6 +46,9 @@ typedef struct
 	s32 last_channels[GF_AUDIO_MIXER_MAX_CHANNELS];
 
 	u32 in_bytes_used, out_samples_written, out_samples_to_write;
+
+	u32 out_samples_pos, in_samples_pos, scaled_sr, bytes_p_samp;
+	u32 ratio_aligned;
 
 	Fixed speed;
 	Fixed pan[GF_AUDIO_MIXER_MAX_CHANNELS];
@@ -71,6 +74,7 @@ struct __audiomix
 	Bool must_reconfig;
 	Bool isEmpty;
 	Bool source_buffering;
+	u32 nb_eos;
 	/*set to non null if this outputs directly to the driver, in which case audio formats have to be checked*/
 	struct _audio_render *ar;
 
@@ -155,10 +159,15 @@ u32 gf_mixer_get_src_count(GF_AudioMixer *am)
 	return gf_list_count(am->sources);
 }
 
-void gf_mixer_force_chanel_out(GF_AudioMixer *am, u32 num_channels)
+GF_Err gf_mixer_force_channel_out(GF_AudioMixer *am, u32 num_channels)
 {
+	if (num_channels > GF_AUDIO_MIXER_MAX_CHANNELS) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_AUDIO, ("[AudioMixer] Number of output channels %d higher than max channels supported %d\n", num_channels, GF_AUDIO_MIXER_MAX_CHANNELS));
+		return GF_NOT_SUPPORTED;
+	}
 	am->force_channel_out = GF_TRUE;
 	am->nb_channels = num_channels;
+	return GF_OK;
 }
 
 u32 gf_mixer_get_block_align(GF_AudioMixer *am)
@@ -187,6 +196,12 @@ GF_EXPORT
 Bool gf_mixer_buffering(GF_AudioMixer *am)
 {
 	return am->source_buffering;
+}
+
+GF_EXPORT
+Bool gf_mixer_is_eos(GF_AudioMixer *am)
+{
+	return am->nb_eos == gf_list_count(am->sources) ? GF_TRUE : GF_FALSE;
 }
 
 GF_EXPORT
@@ -250,33 +265,43 @@ void gf_mixer_get_config(GF_AudioMixer *am, u32 *outSR, u32 *outCH, u32 *outFMT,
 }
 
 GF_EXPORT
-void gf_mixer_set_config(GF_AudioMixer *am, u32 outSR, u32 outCH, u32 outFMT, u64 outChCfg)
+GF_Err gf_mixer_set_config(GF_AudioMixer *am, u32 outSR, u32 outCH, u32 outFMT, u64 outChCfg)
 {
 	if ((am->afmt == outFMT) && (am->nb_channels == outCH)
-	        && (am->sample_rate==outSR) && (am->channel_layout == outChCfg)) return;
+	        && (am->sample_rate==outSR) && (am->channel_layout == outChCfg)) return GF_OK;
 
+	if (outCH > GF_AUDIO_MIXER_MAX_CHANNELS) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_AUDIO, ("[AudioMixer] Number of output channels %d higher than max channels supported %d\n", outCH, GF_AUDIO_MIXER_MAX_CHANNELS));
+		return GF_NOT_SUPPORTED;
+	}
+	if (!outSR) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_AUDIO, ("[AudioMixer] Invalid output sample rate 0\n"));
+		return GF_NOT_SUPPORTED;
+	}
 	gf_mixer_lock(am, GF_TRUE);
 	am->afmt = outFMT;
 	am->bit_depth = gf_audio_fmt_bit_depth(am->afmt);
-	if (!am->force_channel_out) am->nb_channels = outCH;
+	if (!am->force_channel_out)
+		am->nb_channels = outCH;
 	if (get_best_samplerate(am, &outSR, &outCH, &outFMT) == GF_OK) {
 		am->sample_rate = outSR;
 		if (outCH>2) am->channel_layout = outChCfg;
 		else if (outCH==2) am->channel_layout = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT;
-		else am->channel_layout = GF_AUDIO_CH_FRONT_LEFT;
+		else am->channel_layout = GF_AUDIO_CH_FRONT_CENTER;
 	}
 	/*if main mixer recfg output*/
 	if (am->ar)	am->ar->need_reconfig = GF_TRUE;
 	am->must_reconfig = GF_FALSE;
 	gf_mixer_lock(am, GF_FALSE);
+	return GF_OK;
 }
 
 static GFINLINE s32 make_s24_int(u8 *ptr)
 {
-	s32 val;
-	s16 res;
-	memcpy(&res, ptr+1, 2);
-	val = res * 256;
+	s32 val = (s8) ptr[2];
+	val *= 256;
+	val |= ptr[1];
+	val *= 256;
 	val |= ptr[0];
 	return val;
 }
@@ -287,13 +312,41 @@ static GFINLINE s32 make_s24_int(u8 *ptr)
 
 s32 input_sample_s32(u8 *data, u32 nb_ch, u32 sample_offset, u32 channel, u32 planar_stride)
 {
+#ifdef GPAC_BIG_ENDIAN
+	u8 *src = data + 2*(sample_offset*nb_ch + channel);
+	s32 res = src[4];
+	res<<=8;
+	res |= src[3];
+	res<<=8;
+	res |= src[2];
+	res<<=8;
+	res |= src[1];
+	res<<=8;
+	res |= src[0];
+	return res;
+#else
 	s32 *src = (s32 *)data;
 	return src[sample_offset*nb_ch + channel];
+#endif
 }
 s32 input_sample_s32p(u8 *data, u32 nb_ch, u32 sample_offset, u32 channel, u32 planar_stride)
 {
+#ifdef GPAC_BIG_ENDIAN
+	u8 *src = data + 4 * (sample_offset + planar_stride*channel/4);
+	s32 res = src[4];
+	res<<=8;
+	res |= src[3];
+	res<<=8;
+	res |= src[2];
+	res<<=8;
+	res |= src[1];
+	res<<=8;
+	res |= src[0];
+	return res;
+#else
 	s32 *src = (s32 *)data;
 	return src[sample_offset + planar_stride*channel/4];
+#endif
 }
 s32 input_sample_s24(u8 *data, u32 nb_ch, u32 sample_offset, u32 channel, u32 planar_stride)
 {
@@ -335,15 +388,46 @@ s32 input_sample_dblp(u8 *data, u32 nb_ch, u32 sample_offset, u32 channel, u32 p
 }
 s32 input_sample_s16(u8 *data, u32 nb_ch, u32 sample_offset, u32 channel, u32 planar_stride)
 {
+#ifdef GPAC_BIG_ENDIAN
+	u8 *src = data + 2*(sample_offset*nb_ch + channel);
+	s16 res = src[1];
+	res<<=8;
+	res |= src[0];
+	return ((s32)res) * MIX_S16_SCALE;
+#else
 	s16 *src = (s16 *)data;
 	s32 res = src[sample_offset*nb_ch + channel];
 	return res * MIX_S16_SCALE;
+#endif
 }
+s32 input_sample_s16_be(u8 *data, u32 nb_ch, u32 sample_offset, u32 channel, u32 planar_stride)
+{
+#ifdef GPAC_BIG_ENDIAN
+	s16 *src = (s16 *)data;
+	s32 res = src[sample_offset*nb_ch + channel];
+	return res * MIX_S16_SCALE;
+#else
+	u8 *src = data + 2*(sample_offset*nb_ch + channel);
+	s16 res = src[0];
+	res<<=8;
+	res |= src[1];
+	return ((s32)res) * MIX_S16_SCALE;
+#endif
+}
+
 s32 input_sample_s16p(u8 *data, u32 nb_ch, u32 sample_offset, u32 channel, u32 planar_stride)
 {
+#ifdef GPAC_BIG_ENDIAN
+	u8 *src = data + 2 * (sample_offset + planar_stride*channel / 2);
+	s16 res = src[1];
+	res<<=8;
+	res |= src[0];
+	return ((s32)res) * MIX_S16_SCALE;
+#else
 	s16 *src = (s16 *)data;
 	s32 res = src[sample_offset + planar_stride*channel / 2];
 	return res * MIX_S16_SCALE;
+#endif
 }
 s32 input_sample_u8(u8 *data, u32 nb_ch, u32 sample_offset, u32 channel, u32 planar_stride)
 {
@@ -391,6 +475,9 @@ static void gf_am_configure_source(MixerInput *in)
 	case GF_AUDIO_FMT_S16:
 		in->get_sample = input_sample_s16;
 		break;
+	case GF_AUDIO_FMT_S16_BE:
+		in->get_sample = input_sample_s16_be;
+		break;
 	case GF_AUDIO_FMT_S16P:
 		in->get_sample = input_sample_s16p;
 		break;
@@ -424,7 +511,6 @@ Bool gf_mixer_reconfig(GF_AudioMixer *am)
 	max_channels = am->nb_channels;
 	max_afmt = am->afmt;
 	cfg_changed = 0;
-//	max_sample_rate = am->sample_rate;
 	max_sample_rate = 0;
 
 	ch_layout = 0;
@@ -488,7 +574,8 @@ Bool gf_mixer_reconfig(GF_AudioMixer *am)
 
 		/*cfg has changed, we must reconfig everything*/
 		if (cfg_changed || (max_sample_rate != am->sample_rate) ) {
-			in->has_prev = GF_FALSE;
+			in->ratio_aligned = 0;
+			in->bit_depth = 0;
 			memset(&in->last_channels, 0, sizeof(s32)*GF_AUDIO_MIXER_MAX_CHANNELS);
 		}
 	}
@@ -578,7 +665,8 @@ static GFINLINE void gf_mixer_map_channels(s32 *inChan, u32 nb_in, u64 in_ch_lay
 		}
 	} else if (nb_in==2) {
 		if (nb_out==1) {
-			inChan[0] = (inChan[0]+inChan[1])/2;
+			s64 sum = (s64)inChan[0] + (s64) inChan[1];
+			inChan[0] = (s32) (sum/2);
 		} else {
 			for (i=2; i<nb_out; i++) inChan[i] = 0;
 		}
@@ -652,59 +740,100 @@ static GFINLINE void gf_mixer_map_channels(s32 *inChan, u32 nb_in, u64 in_ch_lay
 	}
 }
 
+#define RESAMPLE_SCALER	1000
+
 static void gf_mixer_fetch_input(GF_AudioMixer *am, MixerInput *in, u32 audio_delay)
 {
-	u32 i, j, in_ch, out_ch, prev, next, src_samp, ratio, src_size;
+	u32 j, in_ch, out_ch, prev, next, src_samp, src_size;
 	Bool use_prev;
 	u32 planar_stride=0;
 	s8 *in_data;
 	s32 frac, inChan[GF_AUDIO_MIXER_MAX_CHANNELS], inChanNext[GF_AUDIO_MIXER_MAX_CHANNELS];
 
-	in_data = (s8 *) in->src->FetchFrame(in->src->callback, &src_size, &planar_stride, audio_delay);
-	if (!in_data || !src_size) {
-		in->has_prev = GF_FALSE;
-		/*done, stop fill*/
-		in->out_samples_to_write = 0;
-		return;
-	}
-	
-	ratio = (u32) (in->src->samplerate * FIX2INT(255*in->speed) / am->sample_rate);
-	src_samp = (u32) (src_size * 8 / in->bit_depth / in->src->chan);
 	in_ch = in->src->chan;
 	out_ch = am->nb_channels;
+	use_prev = in->has_prev;
 
-	/*just in case, if only 1 sample available in src, copy over and discard frame since we cannot
-	interpolate audio*/
-	if (src_samp==1) {
-		in->has_prev = GF_TRUE;
-		for (j=0; j<in_ch; j++) {
-			in->last_channels[j] = in->get_sample(in_data, in_ch, 0, j, planar_stride);
+	in_data = (s8 *) in->src->FetchFrame(in->src->callback, &src_size, &planar_stride, audio_delay);
+	if (!in_data || !src_size) {
+		if (in->src->is_eos)
+			am->nb_eos++;
+		else if (in->src->is_buffering)
+			am->source_buffering = GF_TRUE;
+		//end of stream, flush if needed
+		if (in->src->is_eos && use_prev) {
+
+		} else {
+			/*done, stop fill*/
+			in->out_samples_to_write = 0;
+			return;
 		}
-		in->in_bytes_used = src_size;
-		return;
 	}
 
-	/*while space to fill and input data, convert*/
-	use_prev = in->has_prev;
+	//config changed, recompute our values
+	if (!in->ratio_aligned) {
+		u32 ratio = (u32) (in->src->samplerate * FIX2INT(255*in->speed) / am->sample_rate);
+		if (ratio % 255) in->ratio_aligned = 2;
+		else in->ratio_aligned = 1;
+
+		in->in_samples_pos = in->out_samples_pos = 0;
+		in->scaled_sr = FIX2INT(in->src->samplerate * in->speed);
+
+		in->bytes_p_samp = in->bit_depth * in->src->chan / 8;
+	}
+	src_samp = (u32) (src_size / in->bytes_p_samp);
+
+
 	memset(inChan, 0, sizeof(s32)*GF_AUDIO_MIXER_MAX_CHANNELS);
 	memset(inChanNext, 0, sizeof(s32)*GF_AUDIO_MIXER_MAX_CHANNELS);
-	i = 0;
+
+	/*while output not full and input data, convert*/
 	next = prev = 0;
 	while (1) {
-		prev = (u32) (i*ratio) / 255;
-		if (prev>=src_samp) break;
+		u64 src_pos, src_pos_unscale, lfrac;
+		src_pos_unscale = in->out_samples_pos;
+		src_pos_unscale *= in->scaled_sr;
+		src_pos = src_pos_unscale;
+		src_pos /= am->sample_rate;
+		lfrac = src_pos_unscale - src_pos * am->sample_rate;
+		lfrac *= RESAMPLE_SCALER;
+		frac = (s32) (lfrac / am->sample_rate);
 
-		next = prev+1;
-		frac = (i*ratio) - 255*prev;
-		if (frac && (next==src_samp)) break;
-		if (use_prev && prev)
-			use_prev = GF_FALSE;
+		if (src_samp) {
+			if (src_pos < in->in_samples_pos) {
+				use_prev = GF_TRUE;
+				prev = 0;
+				next = 0;
+			} else {
+				prev = (u32) (src_pos - in->in_samples_pos);
+				next = prev+1;
+			}
+
+			if (prev>=src_samp)
+				break;
+			if (frac && (next>=src_samp))
+				break;
+
+			if (use_prev && prev)
+				use_prev = GF_FALSE;
+
+		}
+		//end of stream, no fraction
+		else {
+			if (!frac || (src_pos >= in->in_samples_pos)) {
+				//so that next call will trigger EOS for this stream
+				in->has_prev = GF_FALSE;
+				in->in_bytes_used = src_size + 1;
+				return;
+			}
+			frac = 0;
+		}
 
 		for (j = 0; j < in_ch; j++) {
 			inChan[j] = use_prev ? in->last_channels[j] : in->get_sample(in_data, in_ch, prev, j, planar_stride);
 			if (frac) {
 				inChanNext[j] = in->get_sample(in_data, in_ch, next, j, planar_stride);
-				inChan[j] = (s32) ( ( ((s64) inChanNext[j])*frac + ((s64)inChan[j])*(255-frac)) / 255 );
+				inChan[j] = (s32) ( ( ((s64) inChanNext[j])*frac + ((s64)inChan[j])*(RESAMPLE_SCALER-frac)) / RESAMPLE_SCALER );
 			}
 			//don't apply pan when forced layout is used
 			if (!in->src->forced_layout && (in->pan[j]!=FIX_ONE) ) {
@@ -723,43 +852,56 @@ static void gf_mixer_fetch_input(GF_AudioMixer *am, MixerInput *in, u32 audio_de
 			for (j=0; j<out_ch ; j++) {
 				*(in->ch_buf[j] + in->out_samples_written) = 0;
 			}
-
 		}
-		
-		in->out_samples_written ++;
-		if (in->out_samples_written == in->out_samples_to_write) break;
-		i++;
-	}
 
-	if (!(ratio%255)) {
+		in->out_samples_written ++;
+		in->out_samples_pos ++;
+		if (in->out_samples_written == in->out_samples_to_write)
+			break;
+	}
+	//eos
+	if (!src_samp)
+		return;
+
+	if (in->ratio_aligned==1) {
 		in->has_prev = GF_FALSE;
 		if (next==src_samp) {
 			in->in_bytes_used = src_size;
 		} else {
-			in->in_bytes_used = MIN(src_size, prev * in->bit_depth * in->src->chan / 8);
+			in->in_bytes_used = MIN(src_size, prev * in->bytes_p_samp);
 		}
 	} else {
+		in->in_bytes_used = (prev+1) * in->bytes_p_samp;
 		in->has_prev = GF_TRUE;
-		if (next==src_samp) {
-			for (j=0; j<in_ch; j++) in->last_channels[j] = inChanNext[j];
+
+		if (in->in_bytes_used >= src_size) {
 			in->in_bytes_used = src_size;
+			for (j=0; j<in_ch; j++) in->last_channels[j] = inChanNext[j];
 		} else {
-			in->in_bytes_used = prev * in->bit_depth * in->src->chan / 8;
-			if (in->in_bytes_used>src_size) {
-				in->in_bytes_used = src_size;
-				for (j=0; j<in_ch; j++) in->last_channels[j] = inChanNext[j];
-			} else {
-				u32 idx;
-				idx = (prev>=src_samp) ? (src_samp-1) : prev;
-				for (j=0; j<in_ch; j++) {
-					in->last_channels[j] = in->get_sample(in_data, in_ch, idx, j, planar_stride);
-				}
+			u32 idx;
+			idx = (prev >= src_samp) ? (src_samp-1) : (prev);
+			for (j=0; j<in_ch; j++) {
+				in->last_channels[j] = in->get_sample(in_data, in_ch, idx, j, planar_stride);
 			}
 		}
 	}
+	in->in_samples_pos += in->in_bytes_used / in->bytes_p_samp;
+
+	/*skip full seconds done*/
+	while ((in->in_samples_pos >= in->scaled_sr) && (in->out_samples_pos >= am->sample_rate)) {
+		in->in_samples_pos -= in->scaled_sr;
+		in->out_samples_pos -= am->sample_rate;
+	}
+
 	/*cf below, make sure we call release*/
 	in->in_bytes_used += 1;
 }
+
+#ifdef GPAC_BIG_ENDIAN
+#endif
+
+#define swap_16(x) (( (x) << 8 & 0xff00) | ((x) >> 8 & 0x00ff))
+#define swap_32(x) (swap_16(x) << 16 | swap_16((x) >> 16))
 
 GF_EXPORT
 u32 gf_mixer_get_output(GF_AudioMixer *am, void *buffer, u32 buffer_size, u32 delay)
@@ -772,6 +914,7 @@ u32 gf_mixer_get_output(GF_AudioMixer *am, void *buffer, u32 buffer_size, u32 de
 	char *data, *ptr;
 
 	am->source_buffering = GF_FALSE;
+	am->nb_eos = 0;
 	//reset buffer whatever the state of the mixer is
 	memset(buffer, 0, buffer_size);
 
@@ -792,8 +935,14 @@ u32 gf_mixer_get_output(GF_AudioMixer *am, void *buffer, u32 buffer_size, u32 de
 	single_source = (MixerInput *) gf_list_get(am->sources, 0);
 	/*if cfg changed or unknown, reconfigure the mixer if the audio renderer is attached. Otherwise,  the mixer config never changes internally*/
 	if (!single_source->src->GetConfig(single_source->src, GF_FALSE)) {
+		single_source->ratio_aligned = 0;
+		single_source->bit_depth = 0;
 		if (am->ar) {
 			am->must_reconfig = GF_TRUE;
+			gf_mixer_reconfig(am);
+			gf_mixer_lock(am, GF_FALSE);
+			return 0;
+		} else {
 			gf_mixer_reconfig(am);
 			gf_mixer_lock(am, GF_FALSE);
 			return 0;
@@ -821,7 +970,10 @@ single_source_mix:
 		size = 0;
 		data = single_source->src->FetchFrame(single_source->src->callback, &size, &planar_stride, delay);
 		if (!data || !size) {
-			am->source_buffering = single_source->src->is_buffering;
+			if (single_source->src->is_eos)
+				am->nb_eos++;
+			else
+				am->source_buffering = single_source->src->is_buffering;
 			break;
 		}
 		/*don't copy more than possible*/
@@ -862,19 +1014,24 @@ do_mix:
 	single_source = NULL;
 	force_mix = GF_FALSE;
 	for (i=0; i<count; i++) {
+		Fixed speed;
 		in = (MixerInput *)gf_list_get(am->sources, i);
 		in->muted = in->src->IsMuted(in->src->callback);
-		if (in->muted) continue;
 		if (!in->bit_depth) gf_am_configure_source(in);
 
 		if (in->buffer_size < nb_samples) {
 			for (j=0; j<GF_AUDIO_MIXER_MAX_CHANNELS; j++) {
 				in->ch_buf[j] = (s32 *) gf_realloc(in->ch_buf[j], sizeof(s32) * nb_samples);
+				memset(in->ch_buf[j], 0, sizeof(s32) * nb_samples);
 			}
 			in->buffer_size = nb_samples;
 		}
-		in->speed = in->src->GetSpeed(in->src->callback);
-		if (in->speed<0) in->speed *= -1;
+		speed = in->src->GetSpeed(in->src->callback);
+		if (speed != in->speed) {
+			in->speed = speed;
+			if (in->speed<0) in->speed *= -1;
+			in->ratio_aligned = 0;
+		}
 		in->out_samples_written = 0;
 		in->in_bytes_used = 0;
 
@@ -895,23 +1052,23 @@ do_mix:
 
 		if (in->speed==0) {
 			in->out_samples_to_write = 0;
+			in->out_samples_written = 0;
 		} else {
 			assert(in->src->samplerate);
 			in->out_samples_to_write = nb_samples;
-			if (in->src->IsMuted(in->src->callback)) {
-				memset(in->pan, 0, sizeof(Fixed)*GF_AUDIO_MIXER_MAX_CHANNELS);
-			} else {
-				if (!force_mix  && !in->src->GetChannelVolume(in->src->callback, in->pan)) {
-					/*track first active source with same cfg as mixer*/
-					if (!single_source && (in->src->samplerate == am->sample_rate)
-					        && (in->src->chan == am->nb_channels)
-					        && (in->speed == FIX_ONE)
-					        && (in->src->afmt == am->afmt)
-					   )
-						single_source = in;
-				}
+
+			if (!force_mix && !in->src->GetChannelVolume(in->src->callback, in->pan)) {
+				/*track first active source with same cfg as mixer*/
+				if (!single_source && (in->src->samplerate == am->sample_rate)
+						&& (in->src->chan == am->nb_channels)
+						&& (in->speed == FIX_ONE)
+						&& !in->muted
+						&& (in->src->afmt == am->afmt)
+				   )
+					single_source = in;
 			}
-			nb_act_src ++;
+			if (!in->muted)
+				nb_act_src ++;
 		}
 	}
 	if (!nb_act_src) {
@@ -931,10 +1088,7 @@ do_mix:
 		/*fill*/
 		for (i=0; i<count; i++) {
 			in = (MixerInput *)gf_list_get(am->sources, i);
-			if (in->muted) {
-				in->out_samples_to_write = 0;
-				continue;
-			}
+
 			if (in->out_samples_to_write > in->out_samples_written) {
 				gf_mixer_fetch_input(am, in, delay /*+ 8000 * i / am->bits_per_sample / am->sample_rate / am->nb_channels*/ );
 				if (in->out_samples_to_write > in->out_samples_written) nb_to_fill++;
@@ -943,8 +1097,7 @@ do_mix:
 		/*release - this is done in 2 steps in case 2 audio object use the same source...*/
 		for (i=0; i<count; i++) {
 			in = (MixerInput *)gf_list_get(am->sources, i);
-			if (in->muted) continue;
-			if (in->in_bytes_used) in->src->ReleaseFrame(in->src->callback, in->in_bytes_used-1);
+			if (in->in_bytes_used>1) in->src->ReleaseFrame(in->src->callback, in->in_bytes_used-1);
 			in->in_bytes_used = 0;
 		}
 		if (!nb_to_fill) break;
@@ -959,11 +1112,16 @@ do_mix:
 		u32 k;
 		out_mix = am->output;
 		in = (MixerInput *)gf_list_get(am->sources, i);
-		if (!in->out_samples_written) continue;
+		if (!in->out_samples_written || in->muted) continue;
+
 		/*only write what has been filled in the source buffer (may be less than output size)*/
 		for (j = 0; j < in->out_samples_written; j++) {
 			for (k = 0; k < am->nb_channels; k++) {
-				(*out_mix) += *(in->ch_buf[k] + j);
+				s64 oval = (*out_mix);
+				oval += *(in->ch_buf[k] + j);
+				if (oval>GF_INT_MAX) oval = GF_INT_MAX;
+				else if (oval<GF_INT_MIN) oval = GF_INT_MIN;
+				(*out_mix) = (s32) oval;
 				out_mix += 1;
 			}
 		}
@@ -984,7 +1142,11 @@ do_mix:
 		for (i = 0; i < nb_written; i++) {
 			for (j = 0; j < am->nb_channels; j++) {
 				s32 samp = (*out_mix);
+#ifdef GPAC_BIG_ENDIAN
+				(*out_s32) = swap_32(samp);
+#else
 				(*out_s32) = samp;
+#endif
 				out_s32 += 1;
 				out_mix += 1;
 			}
@@ -996,7 +1158,11 @@ do_mix:
 			out_mix = am->output + j;
 			for (i = 0; i < nb_written; i++) {
 				s32 samp = (*out_mix);
+#ifdef GPAC_BIG_ENDIAN
+				(*out_s32) = swap_32(samp);
+#else
 				(*out_s32) = samp;
+#endif
 				out_s32 += 1;
 				out_mix += am->nb_channels;
 			}
@@ -1053,11 +1219,9 @@ do_mix:
 		for (i = 0; i<nb_written; i++) {
 			for (j = 0; j<am->nb_channels; j++) {
 				s32 samp = (*out_mix);
-//				char samp_c[4];
 				samp /= MIX_S24_SCALE;
 				if (samp > GF_S24_MAX) samp = GF_S24_MAX;
 				else if (samp < GF_S24_MIN) samp = GF_S24_MIN;
-//				memcpy(samp_c, &samp, 3);
 				out_s24[2] = (samp>>16) & 0xFF;
 				out_s24[1] = (samp>>8) & 0xFF;
 				out_s24[0] = samp & 0xFF;
@@ -1071,17 +1235,12 @@ do_mix:
 			out_mix = am->output + j;
 			for (i = 0; i<nb_written; i++) {
 				s32 samp = (*out_mix);
-				char s16tmp[2];
-				u8 lsb;
 				samp /= MIX_S24_SCALE;
 				if (samp > GF_S24_MAX) samp = GF_S24_MAX;
 				else if (samp < GF_S24_MIN) samp = GF_S24_MIN;
-				lsb = (samp) & 0xFF;
-				samp >>= 8;
-//				*((s16 *) (out_s24 +1) ) = (s16)samp;
-				*((s16 *) s16tmp) = (s16)samp;
-				memcpy(out_s24 +1, s16tmp, 2);
-				out_s24[0] = lsb;
+				out_s24[2] = (samp>>16) & 0xFF;
+				out_s24[1] = (samp>>8) & 0xFF;
+				out_s24[0] = samp & 0xFF;
 				out_s24 += 3;
 				out_mix += am->nb_channels;
 			}
@@ -1094,7 +1253,12 @@ do_mix:
 				samp /= MIX_S16_SCALE;
 				if (samp > GF_SHORT_MAX) samp = GF_SHORT_MAX;
 				else if (samp < GF_SHORT_MIN) samp = GF_SHORT_MIN;
+
+#ifdef GPAC_BIG_ENDIAN
+				(*out_s16) = swap_16(samp);
+#else
 				(*out_s16) = samp;
+#endif
 				out_s16 += 1;
 				out_mix += 1;
 			}
@@ -1108,7 +1272,11 @@ do_mix:
 				samp /= MIX_S16_SCALE;
 				if (samp > GF_SHORT_MAX) samp = GF_SHORT_MAX;
 				else if (samp < GF_SHORT_MIN) samp = GF_SHORT_MIN;
+#ifdef GPAC_BIG_ENDIAN
+				(*out_s16) = swap_16(samp);
+#else
 				(*out_s16) = samp;
+#endif
 				out_s16 += 1;
 				out_mix += am->nb_channels;
 			}

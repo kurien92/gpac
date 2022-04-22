@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017
+ *			Copyright (c) Telecom ParisTech 2017-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / DVB4Linux input filter
@@ -97,11 +97,11 @@ static GF_Err dvblin_tune(GF_DVBLinuxCtx *ctx)
 	u32 adapter_num;
 
 	if (!ctx->src) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[DVB4Lin] Missing URL\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[DVB4Lin] Missing URL\n"));
 		return GF_BAD_PARAM;
 	}
 	if (!ctx->chcfg) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[DVB4Lin] Missing channels config file\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[DVB4Lin] Missing channels config file\n"));
 		return GF_BAD_PARAM;
 	}
 	chanfile = gf_fopen(ctx->chcfg, "rb");
@@ -117,7 +117,7 @@ static GF_Err dvblin_tune(GF_DVBLinuxCtx *ctx)
 	} else {
 		adapter_num = 0;
 	}
-	GF_LOG(GF_LOG_DEBUG, GF_LOG_CONTAINER, ("Channel name %s\n", chan_name));
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("Channel name %s\n", chan_name));
 
 	while(!gf_feof(chanfile)) {
 		if ( gf_fgets(line, 255, chanfile) != NULL) {
@@ -200,17 +200,17 @@ static GF_Err dvblin_tune(GF_DVBLinuxCtx *ctx)
 #ifndef GPAC_SIM_LINUX_DVB
 	// Open frontend
 	if((front1 = open(frontend_name,O_RDWR|O_NONBLOCK)) < 0) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("Cannot open frontend %s.\n", frontend_name));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("Cannot open frontend %s.\n", frontend_name));
 		return GF_IO_ERR;
 	} else {
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_CONTAINER, ("Frontend %s opened.\n", frontend_name));
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("Frontend %s opened.\n", frontend_name));
 	}
 	// Open demuxes
 	if ((demux1=open(demux_name, O_RDWR|O_NONBLOCK)) < 0) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("Cannot open demux %s\n", demux_name));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("Cannot open demux %s\n", demux_name));
 		return GF_IO_ERR;
 	} else {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("Demux %s opened.\n", demux_name));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("Demux %s opened.\n", demux_name));
 	}
 	// Set FrontendParameters - DVB-T
 	frp.frequency = ctx->freq;
@@ -288,19 +288,19 @@ GF_Err dvblin_setup_demux(GF_DVBLinuxCtx *ctx)
 	GF_Err e = GF_OK;
 
 	if (!ctx->chcfg) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[DVB4Lin] Missing channels config file\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[DVB4Lin] Missing channels config file\n"));
 		return GF_BAD_PARAM;
 	}
 	if (strnicmp(ctx->src, "dvb://", 6)) return GF_NOT_SUPPORTED;
 
 	if ((ctx->freq != 0) && (ctx->freq == gf_dvblin_get_freq_from_url(ctx, ctx->src)) ) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[M2TSDemux] Tuner already tuned to that frequency\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[M2TSDemux] Tuner already tuned to that frequency\n"));
 		return GF_OK;
 	}
 
 	e = dvblin_tune(ctx);
 	if (e) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[M2TSDemux] Unable to tune to frequency\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[M2TSDemux] Unable to tune to frequency\n"));
 		return GF_SERVICE_ERROR;
 	}
 	return GF_OK;
@@ -318,11 +318,11 @@ GF_Err dvblin_initialize(GF_Filter *filter)
 	e = dvblin_setup_demux(ctx);
 
 	if (e) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_NETWORK, ("[DVBLinux] Failed to open %s\n", ctx->src));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[DVBLinux] Failed to open %s\n", ctx->src));
 		gf_filter_setup_failure(filter, e);
 		return GF_URL_ERROR;
 	}
-	GF_LOG(GF_LOG_INFO, GF_LOG_NETWORK, ("[DVBLinux] opening %s\n", ctx->src));
+	GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("[DVBLinux] opening %s\n", ctx->src));
 
 	ctx->block = gf_malloc(ctx->block_size +1);
 	return GF_OK;
@@ -381,6 +381,7 @@ static GF_Err dvblin_process(GF_Filter *filter)
 #endif
 
 	dst_pck = gf_filter_pck_new_alloc(ctx->pid, nb_read, &out_data);
+	if (!dst_pck) return GF_OUT_OF_MEM;
 	memcpy(out_data, ctx->block, nb_read);
 	gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
 	gf_filter_pck_send(dst_pck);
@@ -403,7 +404,7 @@ static GF_Err dvblin_process(GF_Filter *filter)
 
 static const GF_FilterArgs DVBLinuxArgs[] =
 {
-	{ OFFS(src), "location of source content", GF_PROP_NAME, NULL, NULL, 0},
+	{ OFFS(src), "URL of source content", GF_PROP_NAME, NULL, NULL, 0},
 	{ OFFS(block_size), "block size used to read file", GF_PROP_UINT, "65536", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(chcfg), "path to channels.conf file", GF_PROP_NAME, NULL, NULL, 0},
 	{0}
@@ -412,7 +413,12 @@ static const GF_FilterArgs DVBLinuxArgs[] =
 GF_FilterRegister DVBLinuxRegister = {
 	.name = "dvbin",
 	GF_FS_SET_DESCRIPTION("DVB for Linux")
-	GF_FS_SET_HELP("Experimental DVB support for linux, requires a channel config file through [-chcfg]()")
+	GF_FS_SET_HELP("Experimental DVB support for linux, requires a channel config file through [-chcfg]()\n"
+	"  \n"
+	"The URL syntax is `dvb://CHANNAME[@FRONTEND]`, with:\n"
+	" - CHANNAME: the channel name as listed in the channel config file\n"
+	" - frontend: the index of the DVB adapter to use (optional, default is 0)\n"
+	)
 	.args = DVBLinuxArgs,
 #ifdef GPAC_HAS_LINUX_DVB
 	.private_size = sizeof(GF_DVBLinuxCtx),

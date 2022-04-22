@@ -370,7 +370,7 @@ Bool rectangle_check_adaptation(GF_Node *node, Drawable *stack, GF_TraverseState
 	if (vrinfo.has_full_coverage) {
 		if (is_visible) {
 			if (!txh->is_open) {
-				GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %d stoped on visible partial plane - starting it\n", txh->stream->OD_ID));
+				GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %d stopped on visible partial plane - starting it\n", txh->stream->OD_ID));
 				assert(txh->stream && txh->stream->odm);
 				txh->stream->odm->disable_buffer_at_next_play = GF_TRUE;
 
@@ -380,7 +380,7 @@ Bool rectangle_check_adaptation(GF_Node *node, Drawable *stack, GF_TraverseState
 			return GF_TRUE;
 		} else {
 			if (txh->is_open) {
-				GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texure %d playing on hidden partial plane - stoping it\n", txh->stream->OD_ID));
+				GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texure %d playing on hidden partial plane - stopping it\n", txh->stream->OD_ID));
 				gf_sc_texture_stop_no_unregister(txh);
 			}
 			return GF_FALSE;

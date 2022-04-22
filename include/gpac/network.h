@@ -114,6 +114,16 @@ Encodes URL by replacing special characters with their % encodings.
 char *gf_url_percent_encode(const char *path);
 
 /*!
+\brief URL decoding
+
+Decodes URL by  % encodings with the  special characters they correspond to
+\param path encoded URL of the service
+\return decoded path name , or NULL if error
+ \note the returned string must be freed by user
+ */
+char *gf_url_percent_decode(const char *path);
+
+/*!
 \brief URL to file system
 
 Converts a local URL to a file system value. Removes all white spaces and similar
@@ -124,12 +134,16 @@ void gf_url_to_fs_path(char *url);
 /*!
 \brief get first after a filename/path
 
-Returns a pointer to the first colon at the end of a filename or URL, if any
+Returns a pointer to the first colon at the end of a filename or URL, if any.
+
+If assign_sep is specified, for example '=', the function will make sure that the colon is after the file extension if found and that '=' is not present between colon and file ext.
+This is used to parse 'a:b.mp4:c' (expected result ':c...' and not ':b...') vs 'a:b=c.mp4' ' (expected result ':b') 
+
 \param URL path or URL to inspect
+\param assign_sep value of assignment operand character. If 0, only checks for colon, otherwise chec that no assign sep or colon is present before file extension, if present
 \return position of first colon, or NULL
 */
-char* gf_url_colon_suffix(const char* URL);
-
+char* gf_url_colon_suffix(const char* URL, char assign_sep);
 
 /*!
 \brief Extract resource name from URL
@@ -141,14 +155,13 @@ Extracts the resource name from the URL
 const char *gf_url_get_resource_name(const char *url);
 
 /*!
-\brief Extract resource path from URL
+\brief Gets  resource path from URL
 
-Extracts the reource path from the URL
+Gets the resource path and name from the URL, stripping scheme, server ID, port...
 \param url input url
-\param res_path buffer for resulting path storage
-\return 1 if path was extracted, 0 if url is a single file name.
+\return the extracted path, or the original path if no scheme indication, or NULL of no path
  */
-Bool gf_url_get_resource_path(const char *url, char *res_path);
+const char *gf_url_get_path(const char *url);
 
 /*! @} */
 
@@ -594,6 +607,26 @@ Checks if connection has been closed by remote peer
  */
 GF_Err gf_sk_probe(GF_Socket *sock);
 
+
+/*! socket selection mode*/
+typedef enum
+{
+	/*! select for both read and write operations */
+	GF_SK_SELECT_BOTH=0,
+	/*! select for both read operations */
+	GF_SK_SELECT_READ,
+	/*! select for both write operations */
+	GF_SK_SELECT_WRITE,
+} GF_SockSelectMode;
+
+/*!
+Checks if socket can is ready for read or write
+\param sock the socket object
+\param mode the operation mode desired
+\return GF_OK if ready, GF_IP_SOCK_WOULD_BLOCK if not ready, otherwise error if any (GF_IP_CONNECTION_CLOSED if connection is closed)
+ */
+GF_Err gf_sk_select(GF_Socket *sock, GF_SockSelectMode mode);
+
 /*! @} */
 
 /*!
@@ -624,17 +657,6 @@ Unregisters a socket from a socket group
 \param sk socket object to unregister
  */
 void gf_sk_group_unregister(GF_SockGroup *sg, GF_Socket *sk);
-
-/*! socket selection mode*/
-typedef enum
-{
-	/*! select for both read and write operations */
-	GF_SK_SELECT_BOTH=0,
-	/*! select for both read operations */
-	GF_SK_SELECT_READ,
-	/*! select for both write operations */
-	GF_SK_SELECT_WRITE,
-} GF_SockSelectMode;
 
 /*!
 Performs a select (wait) on the socket group

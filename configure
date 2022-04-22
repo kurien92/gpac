@@ -1,8 +1,8 @@
 #!/bin/sh
 #
 # GPAC configure script
-#     (c) 2003-2018 Telecom ParisTech
-#     Authors: Jean Le Feuvre, Romain Bouqueau
+#     (c) 2003-2022 Telecom ParisTech
+#     Authors: Jean Le Feuvre, Romain Bouqueau, Aurelien David
 #
 #set -v
 
@@ -78,6 +78,7 @@ has_xvid="no"
 has_mad="no"
 has_faad="no"
 has_ffmpeg="no"
+ffmpeg_vvc="no"
 has_amr_nb_fixed="no"
 has_amr_nb="no"
 has_amr_wb="no"
@@ -111,8 +112,9 @@ has_joystick="no"
 has_hid="no"
 has_sock_un="no"
 has_lzma="no"
+has_nghttp2="no"
 enable_joystick="no"
-static_mp4box="no"
+static_bin="no"
 disable_core_tools="no"
 disable_3d="no"
 disable_svg="no"
@@ -161,18 +163,20 @@ disable_vobsub="no"
 disable_ttxt="no"
 disable_ttml="no"
 disable_hevc="no"
-disable_atsc="no"
+disable_route="no"
 disable_crypto="no"
+disable_log="no"
+disable_nvdec="no"
 enable_qjs="yes"
+enable_qjs_libc="yes"
 enable_depth_compositor="no"
-enable_renoir="no"
 enable_sanitizer="no"
-has_avcap="no"
-avcap_cflags=""
-avcap_ldflags="-lavcap"
 has_opensvc="no"
 has_openhevc="no"
 has_vtb="no"
+has_strlcpy="no"
+disable_codecs="no"
+enable_qjs_stack_check="no"
 
 win32="no"
 mingw32="no"
@@ -197,6 +201,7 @@ OSS_LDFLAGS=""
 INSTFLAGS=""
 is_64="no"
 ffmpeg_extra_ldflags=""
+has_st_nsec="no"
 
 logs="config.log"
 echo "Logs for GPAC configure $GPAC_CONFIGURATION" > $logs
@@ -239,10 +244,10 @@ GPAC configuration options:
   --enable-pic             enable Position Independant Code for shared objects
   --strip                  enable strip
   --std-allocator          uses standard lib memory allocator
-  --static-modules         includes static modules in libgpac whenever possible
   --enable-mem-track       enable tracking of all memory allocated by gpac
-  --enable-sanitizer       enable adress sanitizer
+  --enable-sanitizer       enable address sanitizer
   --enable-afl             enable instrumentation for American Fuzzy Lop
+  --enable-afl-clang       enable instrumentation for American Fuzzy Lop using afl-clang(++)
   --disable-opt            disable GCC optimizations
   --disable-ipv6           disable IPV6 support
   --disable-platinum       disable Platinum UPnP support
@@ -263,9 +268,13 @@ GPAC configuration options:
   --enable-amr-nb          enable AMR NB library
   --enable-amr-wb          enable AMR WB library
   --enable-amr             enable both AMR NB and WB libraries
-  --enable-static-bin      link statically against libgpac
-  --static-mp4box          configure for static linking of MP4Box only.
+  --static-modules         use static modules in libgpac rather than dynamic library modules
+  --static-build           link statically against libgpac but still allow dependencies to shared libraries (enable --static-modules)
+  --enable-static-bin      old name for --static-build, deprecated
+  --static-bin             enable static linking of MP4Box and gpac only (enable --static-build), disable MP4Client and all libraries not linkable statically.
+  --static-mp4box          old name for --static-bin, deprecated
   --enable-depth           enables depth handling in the compositor
+  --enable-qjs-stack       enables stack depth checking in QuickJS (WILL CRASH in multithreaded modes)
 
 Configuration options for libgpac - all options can be enabled with --enable-optname
   --disable-all            disables all features in libgpac
@@ -312,8 +321,10 @@ Configuration options for libgpac - all options can be enabled with --enable-opt
   --disable-player         disable player (terminal and compositor)
   --disable-scenegraph     disable scenegraph, scene parsers and player (terminal and compositor)
   --disable-hevc           disable HEVC support
-  --disable-atsc           disable ATSC3 support
+  --disable-route          disable ROUTE (ATSC3) support
   --disable-crypto         disable crypto support
+  --disable-nvdec          disable NVDec support
+  --disable-codecs         disable all media decoders and encoders
 
 Extra libraries configuration. You can turn a library off or force using the local version in gpac/extra_lib/
   --use-ft=OPT             force FreeType OPT=[no,local]
@@ -334,6 +345,8 @@ NOTE: The object files are built at the place where configure is launched
 EOF
 exit 1
 fi
+
+use_static="no"
 
 for opt do
     case "$opt" in
@@ -375,7 +388,15 @@ for opt do
             ;;
         --enable-afl) cc_orig="afl-gcc"; cxx_orig="afl-g++"
             ;;
+        --enable-afl-clang) cc_orig="afl-clang"; cxx_orig="afl-clang++"
+            ;;
         --verbose) verbose="yes";
+            ;;
+        --static-bin) use_static="yes"
+            ;;
+        --static-mp4box) use_static="yes"
+            ;;
+        --enable-sanitizer) enable_sanitizer="yes"
             ;;
     esac
 done
@@ -457,9 +478,23 @@ cxx="${cross_prefix}${cxx}"
 ar="${cross_prefix}${ar}"
 ranlib="${cross_prefix}${ranlib}"
 strip="${cross_prefix}${strip}"
-pkg_config="${pkg_config}"
 windres="${cross_prefix}${windres}"
 
+if test "$enable_sanitizer" = "yes" ; then
+if test "$use_static" = "yes" ; then
+echo "Cannot use static bin with sanitizer, disabling static bin"
+use_static="no"
+fi
+fi
+
+if test "$use_static" = "yes" ; then
+pkg_config="${pkg_config} --static"
+if test "$darwin" != "yes" ; then
+  LDFLAGS="-static $LDFLAGS"
+fi
+else
+pkg_config="${pkg_config}"
+fi
 
 #check pkg_config
 if test "$cross_prefix" = "" ; then
@@ -601,7 +636,7 @@ EOF
           CFLAGS="$CFLAGS -I/mingw32/include -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64"
           LDFLAGS="$LDFLAGS -L/mingw32/lib"
         else
-          extralibs="$extralibs -lws2_32 -lwinmm -limagehlp"
+          extralibs="$extralibs -lws2_32 -lwinmm -limagehlp -ldbghelp"
           CFLAGS="$CFLAGS -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64"
         fi
 		LDFLAGS="$LDFLAGS"
@@ -777,6 +812,17 @@ fi
 
 
 
+#check st_mtim.tv_nsec
+cat > $TMPC << EOF
+#include <sys/stat.h>
+int main( void ) { struct stat st; st.st_mtim.tv_nsec = 0; return 0; }
+EOF
+
+if docc ; then
+    has_st_nsec="yes"
+fi
+
+
 #look for platinum support
 cat > $TMPCXX << EOF
 #include <Platinum.h>
@@ -784,39 +830,6 @@ int main( void ) { return 0; }
 EOF
 if docxx -I$local_inc/platinum $LDFLAGS -L$local_lib -lPlatinum -lPltMediaServer -lPltMediaConnect -lPltMediaRenderer -lNeptune -lZlib -lpthread ; then
   has_platinum="yes"
-fi
-
-#look for avcap support
-avcap_cflags=""
-avcap_ldflags="-lavcap"
-
-cat > $TMPC << EOF
-#include <avcap/avcap.h>
-using namespace avcap;
-int main( void ) {
-  const DeviceCollector::DeviceList& dl = DEVICE_COLLECTOR::instance().getDeviceList();
-  DeviceDescriptor* dd = 0;
-  for (DeviceCollector::DeviceList::const_iterator i = dl.begin(); i != dl.end(); i++) {
-    dd = *i;
-    std::cout << dd->getName().c_str() << "\n";
-  }
-  return 0;
-}
-EOF
-if docxx -o $TMPO $TMPC $LDFLAGS $avcap_cflags $avcap_ldflags ; then
-  has_avcap="yes"
-else
-    if test "$darwin" = "yes" ; then
-        avcap_cflags="-I$local_inc -I$local_inc/avcap/osx"
-        avcap_ldflags="${wl}-flat_namespace -lavcap -lpthread  -framework QuickTime -framework QuartzCore"
-    else
-        avcap_cflags="-I$local_inc -I$local_inc/avcap/linux"
-        avcap_ldflags="-lavcap -lpthread"
-    fi
-    if docxx -o $TMPO $TMPC $avcap_cflags $LDFLAGS -L$local_lib $avcap_ldflags ; then
-        has_avcap="yes"
-        avcap_ldflags="-L$local_lib $avcap_ldflags"
-    fi
 fi
 
 
@@ -894,8 +907,8 @@ if docc $CFLAGS_DIR $ft_cflags $ft_lflags $LDFLAGS ; then
 fi
 
 if test "$has_ft" = "no" ; then
-    ft_cflags="`pkg-config --cflags freetype2 2>>$logs`"
-    ft_lflags="`pkg-config --libs freetype2 2>>$logs`"
+    ft_cflags="`$pkg_config --cflags freetype2 2>>$logs`"
+    ft_lflags="`$pkg_config --libs freetype2 2>>$logs`"
     if docc $ft_cflags $ft_lflags $LDFLAGS ; then
         has_ft="system"
     fi
@@ -904,7 +917,7 @@ fi
 if test "$has_ft" = "no" ; then
     ft_cflags="-I$local_inc/freetype"
     ft_lflags="-L$local_lib -lfreetype"
-    if docc $ft_cflags $ft_lflags ; then
+    if docc $ft_cflags $ft_lflags $LDFLAGS ; then
         has_ft="local"
     fi
 fi
@@ -1010,7 +1023,7 @@ fi
 if test "$has_jpeg" = "no" ; then
     jpeg_cflags="-I$local_inc/jpeg"
     jpeg_lflags="-L$local_lib -ljpeg"
-    if docc $jpeg_cflags $jpeg_lflags ; then
+    if docc $jpeg_cflags $jpeg_lflags $LDFLAGS ; then
         has_jpeg="local"
     fi
 fi
@@ -1054,7 +1067,7 @@ if test "$cross_prefix" = "" ; then
 fi
 
 if test "$has_openjpeg" = "no" ; then
-    if docc -I$local_inc/openjpeg -L$local_lib -lopenjpeg ; then
+    if docc -I$local_inc/openjpeg -L$local_lib -lopenjpeg $LDFLAGS ; then
         has_openjpeg="local"
 	openjpeg_ldflags="-lopenjpeg"
     fi
@@ -1086,7 +1099,7 @@ if test "$cross_prefix" = "" ; then
     fi
 fi
 if test "$has_png" = "no" ; then
-    if docc -I$local_inc/png -L$local_lib -lpng ; then
+    if docc -I$local_inc/png -L$local_lib -lpng $LDFLAGS ; then
         has_png="local"
     fi
 fi
@@ -1112,11 +1125,10 @@ if test "$cross_prefix" = "" ; then
     fi
 fi
 if test "$has_mad" = "no" ; then
-    if docc -I$local_inc -L$local_lib -lmad ; then
+    if docc -I$local_inc -L$local_lib -lmad $LDFLAGS ; then
         has_mad="local"
     fi
 fi
-
 
 
 #look for A52DEC support
@@ -1142,11 +1154,10 @@ if test "$cross_prefix" = "" ; then
     fi
 fi
 if test "$has_a52" = "no" ; then
-    if docc -I$local_inc -L$local_lib -la52 ; then
+    if docc -I$local_inc -L$local_lib -la52 $LDFLAGS ; then
         has_a52="local"
     fi
 fi
-
 
 
 #look for XVID support
@@ -1170,11 +1181,10 @@ if test "$cross_prefix" = "" ; then
     fi
 fi
 if test "$has_xvid" = "no" ; then
-    if docc -I$local_inc -L$local_lib -lxvidcore -lpthread ; then
+    if docc -I$local_inc -L$local_lib -lxvidcore -lpthread  $LDFLAGS ; then
         has_xvid="local"
     fi
 fi
-
 
 
 #look for FAAD support
@@ -1196,11 +1206,10 @@ if test "$cross_prefix" = "" ; then
     fi
 fi
 if test "$has_faad" = "no" ; then
-    if docc -I$local_inc -L$local_lib -lfaad -lm ; then
+    if docc -I$local_inc -L$local_lib -lfaad -lm $LDFLAGS ; then
         has_faad="local"
     fi
 fi
-
 
 
 #look for FFMPEG support
@@ -1274,7 +1283,7 @@ if test "$cross_prefix" = "" ; then
     fi
 fi
 if test "$has_ffmpeg" = "no" ; then
-    if docc -I$local_inc -L$local_lib $ffmpeg_lflags ; then
+    if docc -I$local_inc -L$local_lib $ffmpeg_lflags  $LDFLAGS ; then
         has_ffmpeg="local"
         ffmpeg_cflags="-I$local_inc"
         ffmpeg_lflags="-L$local_lib $ffmpeg_lflags"
@@ -1346,6 +1355,19 @@ else
     has_libswresample="no"
 fi
 
+
+#detect vvc support in ffmpegf
+cat > $TMPC << EOF
+#include <libavcodec/avcodec.h>
+int main(void) {
+    AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_VVC);
+    return 0;
+}
+EOF
+
+if docc $ffmpeg_cflags $ffmpeg_lflags ; then
+    ffmpeg_vvc="yes"
+fi
 
 #look for FREENECT support
 freenect_flags=""
@@ -1460,6 +1482,7 @@ EOF
 if docc $LDFLAGS $vtb_ldflags ; then
     has_vtb="yes"
 fi
+
 fi
 
 
@@ -1665,11 +1688,67 @@ EOF
 
 if docc $CFLAGS_DIR -llzma $LDFLAGS ; then
   has_lzma="yes"
-  GPAC_SH_FLAGS="$GPAC_SH_FLAGS -llzma"
-  if test "$win32" = "yes"; then
-   extralibs="$extralibs -llzma"
+fi
+
+#look for strlcpy support
+cat > $TMPC << EOF
+#include <string.h>
+int main( void ) {
+    char dest[1];
+    strlcpy(dest, "1", 1);
+    return 0;
+}
+EOF
+
+if docc $LDFLAGS ; then
+    has_strlcpy="yes"
+fi
+
+
+#look for nghttp2 support
+
+cat > $TMPC << EOF
+#include <stdio.h>
+#include <nghttp2/nghttp2.h>
+int main( void ) { return 0; }
+EOF
+
+if test "$cross_prefix" = "" -a "$pkg_config" != "no"; then
+  if $pkg_config --exists libnghttp2 ; then
+    nghttp2_cflags=`$pkg_config --cflags libnghttp2`
+    nghttp2_ldflags=`$pkg_config --libs libnghttp2`
+    if docc $nghttp2_cflags $LDFLAGS $nghttp2_ldflags ; then
+        has_nghttp2="system"
+    fi
   fi
 fi
+
+if test "$has_nghttp2" = "no" ; then
+
+if docc $LDFLAGS -lnghttp2 ; then
+    has_nghttp2="system"
+    nghttp2_ldflags="-lnghttp2"
+fi
+if test "$cross_prefix" = "" ; then
+    if test "$has_nghttp2" = "no" ; then
+        if test "$alt_macosx_dir" != "" ; then
+            if cc -o $TMPO $TMPC -I$alt_macosx_dir/include -L$alt_macosx_dir/lib $LDFLAGS -lnghttp2 2>>$logs ; then
+                has_nghttp2="system"
+                nghttp2_ldflags="-lnghttp2"
+            fi
+        fi
+    fi
+fi
+
+if test "$has_nghttp2" = "no" ; then
+    if docc -I$local_inc -L$local_lib -lnghttp2  $LDFLAGS ; then
+        has_nghttp2="local"
+        nghttp2_ldflags="-lnghttp2"
+    fi
+fi
+
+fi
+
 
 #overwrite detection with manual settings
 for opt do
@@ -1708,7 +1787,11 @@ for opt do
             ;;
         --enable-gprof) gprof_build="yes";
             ;;
-        --enable-static-bin) static_build="yes";
+        --static-build) static_build="yes";
+            ;;
+        --enable-static-bin)
+            echo "$opt deprecated, use --static-build instead"
+            static_build="yes";
             ;;
         --disable-ipv6) has_ipv6="no"
             ;;
@@ -1728,8 +1811,6 @@ for opt do
             ;;
         --enable-mem-track) use_memory_tracking="yes"
             ;;
-        --enable-sanitizer) enable_sanitizer="yes"
-            ;;
         --enable-tinygl) enable_tinygl="yes"
             ;;
         --disable-ssl) has_ssl="no"
@@ -1738,7 +1819,13 @@ for opt do
             ;;
         --enable-depth) enable_depth_compositor="yes"
             ;;
-        --static-mp4box) static_mp4box="yes"
+        --enable-qjs-stack) enable_qjs_stack_check="yes"
+            ;;
+        --static-bin) static_bin="yes"
+            ;;
+        --static-mp4box)
+            echo "$opt deprecated, use --static-bin instead"
+            static_bin="yes"
             ;;
         --use-faad=*) has_faad=${opt#--use-faad=}
             ;;
@@ -1757,6 +1844,8 @@ for opt do
         --use-ffmpeg=*) has_ffmpeg=${opt#--use-ffmpeg=}
             ;;
         --use-freenect=*) has_freenect=${opt#--use-freenect=}
+            ;;
+        --use-nghttp2=*) has_nghttp2=${opt#--use-nghttp2=}
             ;;
         --use-png=*) tmp_has_png=${opt#--use-png=}
             if test "$tmp_has_png" = "system" ; then
@@ -1812,9 +1901,9 @@ for opt do
             ;;
         --enable-pulseaudio) has_pulseaudio="yes"
             ;;
-        --disable-all) has_pulseaudio="no"; has_alsa="no"; disable_core_tools="yes"; disable_3d="yes"; disable_svg="yes"; disable_vrml="yes"; disable_od="yes"; disable_bifs="yes"; disable_bifs_enc="yes"; disable_laser="yes"; disable_seng="yes"; disable_qtvr="yes";  disable_avi="yes"; disable_ogg="yes"; disable_m2ps="yes"; disable_m2ts="yes"; disable_m2ts_mux="yes"; disable_parsers="yes"; disable_import="yes"; disable_export="yes"; disable_swf="yes"; disable_scene_stats="yes"; disable_scene_dump="yes"; disable_scene_encode="yes"; disable_loader_isoff="yes"; disable_od_dump="yes"; disable_od_parse="yes"; disable_isom_dump="yes"; disable_crypto="yes"; disable_isoff="yes"; disable_isoff_write="yes"; disable_isoff_hint="yes"; disable_isoff_frag="yes"; disable_streaming="yes"; disable_x3d="yes"; disable_loader_bt="yes"; disable_loader_xmt="yes"; has_dvb4linux="no"; disable_player="yes"; disable_vobsub="yes"; disable_scenegraph="yes"; disable_dvbx="yes"; disable_ttxt="yes"; disable_vtt="yes"; disable_ttml="yes"; disable_saf="yes"; disable_smgr="yes"; disable_mpd="yes"; disable_dash="yes"; disable_isoff_hds="yes"; disable_hevc="yes" ; disable_atsc="yes" ; enable_qjs="no"
+        --disable-all) has_pulseaudio="no"; has_alsa="no"; disable_core_tools="yes"; disable_3d="yes"; disable_svg="yes"; disable_vrml="yes"; disable_od="yes"; disable_bifs="yes"; disable_bifs_enc="yes"; disable_laser="yes"; disable_seng="yes"; disable_qtvr="yes";  disable_avi="yes"; disable_ogg="yes"; disable_m2ps="yes"; disable_m2ts="yes"; disable_m2ts_mux="yes"; disable_parsers="yes"; disable_import="yes"; disable_export="yes"; disable_swf="yes"; disable_scene_stats="yes"; disable_scene_dump="yes"; disable_scene_encode="yes"; disable_loader_isoff="yes"; disable_log="yes"; disable_od_dump="yes"; disable_od_parse="yes"; disable_isom_dump="yes"; disable_crypto="yes"; disable_isoff="yes"; disable_isoff_write="yes"; disable_isoff_hint="yes"; disable_isoff_frag="yes"; disable_streaming="yes"; disable_x3d="yes"; disable_loader_bt="yes"; disable_loader_xmt="yes"; has_dvb4linux="no"; disable_player="yes"; disable_vobsub="yes"; disable_scenegraph="yes"; disable_dvbx="yes"; disable_ttxt="yes"; disable_vtt="yes"; disable_ttml="yes"; disable_saf="yes"; disable_smgr="yes"; disable_mpd="yes"; disable_dash="yes"; disable_isoff_hds="yes"; disable_hevc="yes" ; disable_nvdec="yes" ; disable_route="yes" ; enable_qjs="no"
             ;;
-        --isomedia-only) has_pulseaudio="no"; has_alsa="no"; disable_core_tools="yes"; disable_3d="yes"; disable_svg="yes"; disable_vrml="yes"; disable_od="yes"; disable_bifs="yes"; disable_bifs_enc="yes"; disable_laser="yes"; disable_seng="yes"; disable_qtvr="yes";  disable_avi="yes"; disable_ogg="yes"; disable_m2ps="yes"; disable_m2ts="yes"; disable_m2ts_mux="yes"; disable_parsers="yes"; disable_import="yes"; disable_export="yes"; disable_swf="yes"; disable_scene_stats="yes"; disable_scene_dump="yes"; disable_scene_encode="yes"; disable_loader_isoff="yes"; disable_od_dump="yes"; disable_od_parse="yes"; disable_isom_dump="yes"; disable_crypto="yes"; disable_streaming="yes"; disable_x3d="yes"; disable_loader_bt="yes"; disable_loader_xmt="yes"; has_dvb4linux="no"; disable_player="yes"; disable_vobsub="yes"; disable_scenegraph="yes"; disable_dvbx="yes"; disable_ttxt="yes"; disable_saf="yes"; disable_smgr="yes"; disable_mpd="yes"; disable_dash="yes"; disable_hevc="no"; disable_isoff="no"; disable_isoff_hds="no"; disable_isoff_write="no"; disable_isoff_hint="no"; disable_isoff_frag="no" ; disable_atsc="yes" ; enable_qjs="no"
+        --isomedia-only) has_pulseaudio="no"; has_alsa="no"; disable_core_tools="yes"; disable_3d="yes"; disable_svg="yes"; disable_vrml="yes"; disable_od="yes"; disable_bifs="yes"; disable_bifs_enc="yes"; disable_laser="yes"; disable_seng="yes"; disable_qtvr="yes";  disable_avi="yes"; disable_ogg="yes"; disable_m2ps="yes"; disable_m2ts="yes"; disable_m2ts_mux="yes"; disable_parsers="yes"; disable_import="yes"; disable_export="yes"; disable_swf="yes"; disable_scene_stats="yes"; disable_scene_dump="yes"; disable_scene_encode="yes"; disable_loader_isoff="yes"; disable_od_dump="yes"; disable_od_parse="yes"; disable_isom_dump="yes"; disable_crypto="yes"; disable_streaming="yes"; disable_x3d="yes"; disable_loader_bt="yes"; disable_loader_xmt="yes"; has_dvb4linux="no"; disable_player="yes"; disable_vobsub="yes"; disable_scenegraph="yes"; disable_dvbx="yes"; disable_ttxt="yes"; disable_saf="yes"; disable_smgr="yes"; disable_mpd="yes"; disable_dash="yes"; disable_hevc="no"; disable_isoff="no"; disable_isoff_hds="no"; disable_isoff_write="no"; disable_isoff_hint="no"; disable_isoff_frag="no" ; disable_route="yes" ; disable_nvdec="yes" ; enable_qjs="no"
             ;;
         --disable-3d) disable_3d="yes"
             ;;
@@ -2010,13 +2099,25 @@ for opt do
             ;;
         --enable-hevc) disable_hevc="no"
             ;;
-        --disable-atsc) disable_atsc="yes"
+        --disable-route) disable_route="yes"
             ;;
-        --enable-atsc) disable_atsc="no"
+        --enable-route) disable_route="no"
             ;;
         --disable-qjs) enable_qjs="no"
             ;;
         --enable-qjs) enable_qjs="yes"
+            ;;
+        --disable-qjs-libc) enable_qjs_libc="no"
+            ;;
+        --enable-qjs-libc) enable_qjs_libc="yes"
+            ;;
+        --disable-log) disable_log="yes"
+            ;;
+        --enable-log) disable_log="no"
+            ;;
+        --disable-nvdec) disable_nvdec="yes"
+            ;;
+        --disable-codecs) disable_codecs="yes"
             ;;
     esac
 done
@@ -2031,6 +2132,12 @@ if test "$disable_core_tools" = "no"; then
   if test "$has_zlib" = "no" ; then
     echo "error: zlib not found on system or in local libs"
     exit 1
+  fi
+  if test "$has_zlib" = "force-no" ; then
+    # can't have libpng without zlib
+    has_png="no"
+    # can't have freetype without libpng
+    has_ft="no"
   fi
   if test "$dlopen" = "no"; then
     if test "$win32" = "no"; then
@@ -2245,40 +2352,93 @@ fi
 
 #man dir
 if test x"$mandir" = x""; then
-    mandir="${prefix}/share/man"
+    mandir="share/man"
 fi
 
-if test "$static_mp4box" = "yes"; then
-    has_opengl="no"
-    has_ssl="no"
-    has_js="no"
+
+if test "$disable_codecs" = "yes"; then
     has_jpeg="no"
     has_png="no"
     has_mad="no"
-    has_ft="no"
-    has_openjpeg="no"
+    has_a52="no"
     has_mad="no"
     has_faad="no"
     has_xvid="no"
+    has_opensvc="no"
+    has_openjpeg="no"
     has_ffmpeg="no"
     has_ogg="no"
     has_theora="no"
     has_vorbis="no"
-    has_a52="no"
-    has_opensvc="no"
+    has_openhevc="no"
+fi
+
+if test "$static_bin" = "yes"; then
+    static_modules="yes"
+    static_build="yes"
+    #we cannot use openssl vanilla since it is usually built with DSO and requires dlopen
+    has_ssl="no"
+    #we cannot use ipv6 due to getaddrinfo not being present
+    has_ipv6="no"
+
+#    has_js="no"
+#    has_ft="no"
+#    has_jpeg="no"
+#    has_png="no"
+#    has_mad="no"
+#    has_a52="no"
+#    has_mad="no"
+#    has_faad="no"
+#    has_xvid="no"
+#    has_opensvc="no"
+
+    #we cannot use openjpeg to produce a static bin, no static lib on most distributions
+    has_openjpeg="no"
+
+    #we cannot use FFMPEG to produce a static bin, no static lib on most distributions. This could be done by building a local statoc only ffmpeg
+if test "$has_ffmpeg" = "system" ; then
+    has_ffmpeg="no"
+fi
+
+    #we cannot use ogg/theora/vorbis to produce a static bin, no static lib on most distributions, issues with lm acosf_finite, log_finite, ...
+    has_ogg="no"
+    has_theora="no"
+    has_vorbis="no"
+    #we cannot use openhevc to produce a static bin, dependencies to avcodec/avformat. We need a static ffmpeg build with openhevc support
     has_openhevc="no"
     has_freenect="no"
     has_platinum="no"
-    static_build="yes"
+    has_lzma="no"
+    has_vtb="no"
+
+#we cannot use openGL nor audio/video output to produce a static bin
+    has_opengl="no"
+    has_sdl="no"
+    has_oss_audio="no"
+    has_alsa="no"
+    has_jack="no"
+    has_pulseaudio="no"
+    has_directfb="no"
+    has_x11="no"
+    has_dvb4linux="no"
+    has_mingw_directx="no"
+
 fi
 
 if test "$cpu" = "sh4"; then
     viren_dir="`ls \"$source_path/modules\" | grep viren_out`"
     if test "$viren_dir" = "viren_out"; then
         enable_depth_compositor="yes"
-        enable_renoir="yes"
     fi
 fi
+
+if test "$has_lzma" = "yes"; then
+  GPAC_SH_FLAGS="$GPAC_SH_FLAGS -llzma"
+  if test "$win32" = "yes"; then
+   extralibs="$extralibs -llzma"
+  fi
+fi
+
 
 if test "$disable_player" = "yes" ; then
     disable_scenegraph="yes"
@@ -2304,6 +2464,7 @@ if test "$disable_scenegraph" = "yes" ; then
     disable_streaming="yes"
     disable_player="yes"
     disable_smgr="yes"
+    disable_nvdec="yes"
     has_js="no"
 fi
 
@@ -2337,7 +2498,7 @@ soname_version="${version_major}.${version_minor}.${version_micro}"
 
 #check revision.h
 cd $source_path
-./check_revision.sh
+. ./check_revision.sh
 cd $build_path
 
 echo ""
@@ -2354,21 +2515,34 @@ if test $cpu = "mips"; then
 fi
 echo ""
 echo "** GPAC $version rev$revision Core Configuration **"
+if test "$static_bin" = "yes" ; then
+    echo "Static binaries enabled"
+    echo "#define GPAC_STATIC_BUILD" >> $TMPH
+elif test "$static_build" = "yes" ; then
+    echo "Static build enabled"
+    echo "#define GPAC_STATIC_BUILD" >> $TMPH
+else
+    echo "Static Modules: $static_modules"
+fi
 echo "debug version: $debuginfo"
 echo "GProf enabled: $gprof_build"
-echo "Static build enabled: $static_build"
 echo "Memory tracking enabled: $use_memory_tracking"
 echo "Sanitizer enabled: $enable_sanitizer"
 echo "Fixed-Point Version: $use_fixed_point"
 echo "IPV6 Support: $has_ipv6"
-echo "Static Modules: $static_modules"
-echo "QuickJS Support: $enable_qjs"
+echo "QuickJS Support: $enable_qjs (qjslibc $enable_qjs_libc)"
 
 if test "$disable_player" = "yes" ; then
     echo "Player disabled"
     echo "#define GPAC_DISABLE_PLAYER" >> $TMPH
     disable_laser="yes"
 fi
+
+if test "$has_st_nsec" = "yes" ; then
+    echo "#define GPAC_HAS_MTIM_NSEC" >> $TMPH
+fi
+
+
 if test "$disable_smgr" = "yes" ; then
 disable_seng="yes"
 disable_qtvr="yes"
@@ -2562,6 +2736,10 @@ if test "$enable_depth_compositor" = "yes" ; then
     echo "#define GF_SR_USE_DEPTH" >> $TMPH
 fi
 
+if test "$enable_qjs_stack_check" = "yes" ; then
+    echo "#define GPAC_QJS_STACK_CHECK" >> $TMPH
+fi
+
 if test "$disable_mpd" = "yes" ; then
     echo "HLS and DASH Manifest Disabled"
     echo "#define GPAC_DISABLE_MPD" >> $TMPH
@@ -2577,9 +2755,9 @@ if test "$disable_hevc" = "yes" ; then
     echo "#define GPAC_DISABLE_HEVC" >> $TMPH
 fi
 
-if test "$disable_atsc" = "yes" ; then
-    echo "ATSC3 Support disabled"
-    echo "#define GPAC_DISABLE_ATSC" >> $TMPH
+if test "$disable_route" = "yes" ; then
+    echo "ROUTE Support disabled"
+    echo "#define GPAC_DISABLE_ROUTE" >> $TMPH
 fi
 
 if test "$disable_crypto" = "yes" ; then
@@ -2587,40 +2765,43 @@ if test "$disable_crypto" = "yes" ; then
     echo "#define GPAC_DISABLE_CRYPTO" >> $TMPH
 fi
 
+if test "$disable_log" = "yes" ; then
+    echo "Logging disabled"
+    echo "#define GPAC_DISABLE_LOG" >> $TMPH
+fi
+
 echo ""
 
 echo "** Detected libraries **"
 echo "zlib: $has_zlib"
+echo "OpenGL support: $has_opengl"
+echo "TinyGL support: $has_tinygl"
+echo "OpenSSL support: $has_ssl"
 
 if test "$win32" != "yes" ; then
     echo "OSS Audio: $has_oss_audio"
     echo "ALSA Audio: $has_alsa"
     echo "Jack Audio: $has_jack"
-    echo "PulseAudio Audio: $has_pulseaudio"
-    echo "DirectFB support: $has_directfb"
+    echo "Pulse Audio: $has_pulseaudio"
+    echo "DirectFB: $has_directfb"
 
     if test "$has_x11" != "no" ; then
         echo "X11 Shared Memory support: $has_x11_shm (path: $X11_PATH)"
         echo "X11 XVideo support: $has_x11_xv"
     fi
 fi
-echo "SDL Support: $has_sdl"
+echo "SDL: $has_sdl"
 if test "$sdl_too_old" = "yes" ; then
     echo "SDL Version too old - please upgrade for SDL support"
 fi
-echo "OpenGL support: $has_opengl"
-echo "TinyGL support: $has_tinygl"
-echo "OpenSSL support: $has_ssl"
 
 if test "$win32" = "yes" ; then
-    echo "DirectX Support: $has_mingw_directx"
+    echo "DirectX: $has_mingw_directx"
 fi
 if test "$linux" = "yes" ; then
-    echo "DVB Support: $has_dvb4linux"
+    echo "DVB for Linux: $has_dvb4linux"
 fi
 
-echo ""
-echo "** Extra Libraries used **"
 echo "FreeType: $has_ft"
 echo "JPEG: $has_jpeg"
 echo "OpenJPEG: $has_openjpeg"
@@ -2629,10 +2810,15 @@ echo "MAD: $has_mad"
 echo "FAAD: $has_faad"
 echo "XVID: $has_xvid"
 echo "FFMPEG: $has_ffmpeg"
+if test "$has_ffmpeg" != "no" ; then
+if test "$ffmpeg_vvc" = "yes" ; then
+echo "FFMPG VVC Support: $ffmpeg_vvc"
+fi
+fi
 echo "LZMA: $has_lzma"
 echo "Xiph OGG: $has_ogg"
 echo "Platinum UPnP: $has_platinum"
-echo "AVCap: $has_avcap"
+
 if test "$has_ogg" = "no"; then
     has_ogg="no"
 else
@@ -2643,10 +2829,8 @@ echo "A52 (AC3): $has_a52"
 echo "OpenSVCDecoder: $has_opensvc"
 echo "OpenHEVCDecoder: $has_openhevc"
 echo "Freenect: $has_freenect"
+echo "nghttp2: $has_nghttp2"
 
-if test "$enable_renoir" = "yes" ; then
-    echo "Renoir enabled - make sure the driver libraries are present in modules/viren_out directory"
-fi
 
 if test "$has_amr_nb_fixed" = "yes" ; then
     echo ""
@@ -2697,7 +2881,7 @@ fi
 
 
 if test "$enable_sanitizer" = "yes" ; then
-    CFLAGS="$CFLAGS -fsanitize=address,undefined -fno-sanitize-recover -g"
+    CFLAGS="$CFLAGS -fsanitize=address,undefined -fno-sanitize-recover -g -fno-omit-frame-pointer -DASAN_ENABLED"
     LDFLAGS="$LDFLAGS -fsanitize=address,undefined -ldl"
 fi
 
@@ -2717,9 +2901,7 @@ echo "GPAC_CONFIGURATION=$GPAC_CONFIGURATION" >> config.mak
 
 echo "prefix=$prefix" >> config.mak
 echo "DESTDIR=$DESTDIR" >> config.mak
-echo "moddir=$prefix/$libdir/gpac" >> config.mak
-echo "moddir_path=$prefix/$libdir/gpac" >> config.mak
-echo "mandir=$mandir" >> config.mak
+echo "moddir=gpac" >> config.mak
 echo "tinygl_target_bin_dir=$target_bin_dir" >> config.mak
 echo "MAKE=$make" >> config.mak
 
@@ -2737,14 +2919,22 @@ echo "STRIP=@$strip" >> config.mak
 echo "WINDRES=$windres" >> config.mak
 fi
 echo "INSTALL=$install" >> config.mak
-echo "LIBTOOL=libtool" >> config.mak
+echo "LIBTOOL=@libtool" >> config.mak
 
 echo "INSTFLAGS=$instflags" >> config.mak
 echo "OPTFLAGS=$CFLAGS" >> config.mak
 echo "CXXFLAGS=$CXXFLAGS" >> config.mak
 echo "LDFLAGS=$LDFLAGS" >> config.mak
 echo "SHFLAGS=$SHFLAGS" >> config.mak
-echo "libdir=$libdir" >> config.mak
+
+pf="$prefix/"
+lib_dir=${libdir#"$pf"}
+echo "lib_dir=$lib_dir" >> config.mak
+
+pf="$prefix/"
+man_dir=${mandir#"$pf"}
+echo "man_dir=$man_dir" >> config.mak
+
 
 echo "STATIC_MODULES=$static_modules" >> config.mak
 
@@ -2859,6 +3049,10 @@ echo "INSTFLAGS=$INSTFLAGS" >> config.mak
 echo "CONFIG_JS=$enable_qjs" >> config.mak
 if test "$enable_qjs" = "yes" ; then
 echo "#define GPAC_HAS_QJS" >> $TMPH
+if test "$enable_qjs_libc" = "no" ; then
+echo "#define GPAC_DISABLE_QJS_LIBC" >> $TMPH
+fi
+
 fi
 
 if test "$has_zlib" = "no" -o "$has_zlib" = "force-no" ; then
@@ -2885,6 +3079,11 @@ echo "CONFIG_VTB=$has_vtb" >> config.mak
 if test "$has_vtb" != "no" ; then
     echo "#define GPAC_HAS_VTB" >> $TMPH
     echo "vtb_ldflags=$vtb_ldflags" >> config.mak
+fi
+
+echo "CONFIG_STRLCPY=$has_strlcpy" >> config.mak
+if test "$has_strlcpy" != "no" ; then
+    echo "#define GPAC_HAS_STRLCPY" >> $TMPH
 fi
 
 if test "$has_sock_un" != "no" ; then
@@ -2932,6 +3131,9 @@ else
     echo "CONFIG_LIBAV=$is_libav" >> config.mak
     echo "CONFIG_LIBSWRESAMPLE=$has_libswresample" >> config.mak
     echo "#define GPAC_HAS_FFMPEG" >> $TMPH
+    if test "$ffmpeg_vvc" = "yes"; then
+      echo "#define FFMPEG_ENABLE_VVC" >> $TMPH
+    fi
 fi
 echo "CONFIG_FFMPEG_OLD=$old_ffmpeg_inc" >> config.mak
 
@@ -2953,6 +3155,14 @@ fi
 if test "$want_gcov"  = "yes" ; then
     echo "#define GPAC_ENABLE_COVERAGE" >> $TMPH
 fi
+
+echo "CONFIG_NGHTTP2=$has_nghttp2" >> config.mak
+if test "$has_nghttp2" != "no" ; then
+    echo "NGHTTP2_CFLAGS=$nghttp2_cflags" >> config.mak
+    echo "NGHTTP2_LDFLAGS=$nghttp2_ldflags" >> config.mak
+    echo "#define GPAC_HAS_HTTP2" >> $TMPH
+fi
+
 
 echo "DISABLE_PLAYER=$disable_player" >> config.mak
 echo "DISABLE_STREAMING=$disable_streaming" >> config.mak
@@ -2992,7 +3202,7 @@ echo "DISABLE_OD_PARSE=$disable_od_parse" >> config.mak
 echo "MINIMAL_OD=$disable_od" >> config.mak
 echo "DISABLE_ISOM_ADOBE=$disable_isoff_hds" >> config.mak
 echo "DISABLE_VRML=$disable_vrml" >> config.mak
-echo "DISABLE_ATSC=$disable_atsc" >> config.mak
+echo "DISABLE_ROUTE=$disable_route" >> config.mak
 echo "DISABLE_CRYPTO=$disable_crypto" >> config.mak
 
 if test "$disable_parsers" = "yes" ; then
@@ -3015,6 +3225,10 @@ fi
 
 if test "$has_tinygl" = "yes" ; then
     echo "#define GPAC_USE_TINYGL" >> $TMPH
+fi
+
+if test "$disable_nvdec" = "yes" ; then
+    echo "#define GPAC_DISABLE_NVDEC" >> $TMPH
 fi
 
 echo "ENABLE_JOYSTICK=$has_joystick" >> config.mak
@@ -3041,7 +3255,7 @@ echo "CONFIG_AMR_NB_FT=$has_amr_nb" >> config.mak
 echo "CONFIG_AMR_WB_FT=$has_amr_wb" >> config.mak
 echo "DEBUGBUILD=$debuginfo" >> config.mak
 echo "GPROFBUILD=$gprof_build" >> config.mak
-echo "MP4BOX_STATIC=$static_mp4box" >> config.mak
+echo "STATIC_BINARY=$static_bin" >> config.mak
 echo "STATICBUILD=$static_build" >> config.mak
 
 echo "CONFIG_IPV6=$has_ipv6" >> config.mak
@@ -3062,12 +3276,6 @@ fi
 
 echo "CONFIG_PLATINUM=$has_platinum" >> config.mak
 
-echo "CONFIG_AVCAP=$has_avcap" >> config.mak
-if test "$has_avcap" = "yes" ; then
-    echo "AVCAP_CFLAGS=$avcap_cflags" >> config.mak
-    echo "AVCAP_LDFLAGS=$avcap_ldflags" >> config.mak
-fi
-
 echo "CONFIG_OPENSVC=$has_opensvc" >> config.mak
 if test "$has_opensvc" = "yes" ; then
     echo "OSVC_CFLAGS=$osvc_cflags" >> config.mak
@@ -3080,6 +3288,12 @@ if test "$has_openhevc" = "yes" ; then
     echo "OHEVC_CFLAGS=$ohevc_cflags" >> config.mak
     echo "OHEVC_LDFLAGS=$ohevc_ldflags" >> config.mak
     echo "#define GPAC_HAS_OPENHEVC" >> $TMPH
+
+
+if test "$static_modules" = "yes" ; then
+    echo "#define GPAC_OPENHEVC_STATIC" >> $TMPH
+fi
+
 fi
 
 echo "MOZILLA_DIR=$moz_path" >> config.mak
@@ -3124,8 +3338,6 @@ else
     echo "X11_LIB_PATH=$X11_PATH/lib" >> config.mak
 fi
 echo "X11_INC_PATH=$X11_PATH/include" >> config.mak
-
-echo "RENOIR_ENABLE=$enable_renoir" >> config.mak
 
 GPAC_ENST_INC=no
 GPAC_ENST=no
@@ -3255,6 +3467,13 @@ echo '	@echo "  CC $<"' >> config.mak
 fi
 echo '	$(CXX) $(CFLAGS) -c -o $@ $<' >> config.mak
 
+echo '%.o: %.rc' >> config.mak
+if test "$verbose" = "no" ; then
+echo '	@echo "  RC $<"' >> config.mak
+fi
+echo '	$(WINDRES) $< -o $@ ' >> config.mak
+
+
 #pkg-config
 generate_pkgconfig () {
 	echo "prefix=$prefix"
@@ -3273,29 +3492,14 @@ generate_pkgconfig () {
 generate_pkgconfig > gpac.pc
 
 
-generate_gpacdesktop () {
-	echo "[Desktop Entry]"
-	echo "Version=1.0"
-	echo "Name=MP4Client"
-	echo "Comment=GPAC Media Player"
-	echo "GenericName=Media Player"
-	echo "Keywords=Media Player"
-	echo "Exec=MP4Client -gui %u"
-	echo "Terminal=false"
-	echo "X-MultipleArgs=false"
-	echo "Type=Application"
-	echo "Icon=$prefix/share/pixmaps/gpac.png"
-	echo "Categories=AudioVideo"
-	echo "MimeType=text/text;text/xml;application/xhtml+xml;application/xml;image/jpeg;image/png;video/webm;video/mp4;video/mpeg;audio/mp4;audio/mpeg;x-scheme-handler/rtsp;x-scheme-handler/rtp;x-scheme-handler/atsc"
-	echo "StartupNotify=true"
-	echo "Actions=new-window"
-	echo ""
-	echo "[Desktop Action new-window]"
-	echo "Name=Open a New Window"
-	echo "Exec=MP4Client"
-	echo ""
-}
+if test "$static_bin" = "yes"; then
+ if test "$darwin" = "yes" ; then
+  echo "\nWarning: static binaries on OSX cannot remove all dependendencies to system libraries\n"
+ elif test "$win32" = "yes" ; then
+  echo "\nWarning: static binaries on Win32 cannot remove all dependendencies to system libraries\n"
+ fi
+fi
 
-generate_gpacdesktop > "$source_path/share/gpac.desktop"
+
 
 echo "Done - type 'make help' for make info, 'make' to build"

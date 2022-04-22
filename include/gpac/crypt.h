@@ -2,7 +2,7 @@
 *			GPAC - Multimedia Framework C SDK
 *
 *			Authors: Jean Le Feuvre
-*			Copyright (c) Telecom ParisTech 2000-2019
+*			Copyright (c) Telecom ParisTech 2000-2022
 *					All rights reserved
 *
 *  This file is part of GPAC / Crypto Tools sub-project
@@ -65,7 +65,9 @@ typedef enum {
 	/*! CBC chaining mode*/
 	GF_CBC = 0,
 	/*! CTR chaining mode*/
-	GF_CTR = 1
+	GF_CTR = 1,
+	/*! ECB (no chaining), payload must be a multiple of 16-bytes blocks*/
+	GF_ECB = 2,
 } GF_CRYPTO_MODE;
 
 /*! Algorithm mode to use*/
@@ -113,7 +115,7 @@ GF_Err gf_crypt_set_IV(GF_Crypt *gfc, const void *iv, u32 size);
 
 /*! gets the IV of the algorithm.
 The size will hold the size of the state and the state must have enough bytes to hold it (17 is enough for AES 128).
-In CTR mode, the first byte will be set to the counter value (number of bytes consummed in last block), or 0 if all bytes were consummed
+In CTR mode, the first byte will be set to the counter value (number of bytes consumed in last block), or 0 if all bytes were consumed
 \param gfc the target crytpo context
 \param iv filled with the current IV
 \param size will be set to the IV size (16 for AES CBC? 17 for AES CTR)

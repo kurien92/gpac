@@ -399,7 +399,7 @@
     <ClInclude Include="..\..\src\filters\isoffin.h">
       <Filter>filters</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\gpac\atsc.h">
+    <ClInclude Include="..\..\include\gpac\route.h">
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="..\..\include\gpac\crypt_tools.h">
@@ -440,6 +440,9 @@
     </ClInclude>
     <ClInclude Include="..\..\src\scenegraph\qjs_common.h">
       <Filter>scenegraph</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\quickjs\quickjs-libc.h">
+      <Filter>quickjs</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -1097,7 +1100,7 @@
     <ClCompile Include="..\..\src\isomedia\iff.c">
       <Filter>isomedia</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\src\media_tools\atsc_dmx.c">
+    <ClCompile Include="..\..\src\media_tools\route_dmx.c">
       <Filter>media_tools</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\compositor\clock.c">
@@ -1295,6 +1298,9 @@
     <ClCompile Include="..\..\src\filters\inspect.c">
       <Filter>filters</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\filters\io_fcryp.c">
+      <Filter>filters</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\filters\isoffin_load.c">
       <Filter>filters</Filter>
     </ClCompile>
@@ -1317,6 +1323,9 @@
       <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\filters\mux_isom.c">
+      <Filter>filters</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\filters\mux_ogg.c">
       <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\filters\out_audio.c">
@@ -1346,6 +1355,9 @@
     <ClCompile Include="..\..\src\filters\reframe_img.c">
       <Filter>filters</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\filters\reframe_mhas.c">
+      <Filter>filters</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\filters\reframe_mp3.c">
       <Filter>filters</Filter>
     </ClCompile>
@@ -1364,16 +1376,25 @@
     <ClCompile Include="..\..\src\filters\reframe_rawvid.c">
       <Filter>filters</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\filters\reframe_truehd.c">
+      <Filter>filters</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\filters\reframer.c">
       <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\filters\resample_audio.c">
       <Filter>filters</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\filters\restamp.c">
+      <Filter>filters</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\filters\rewind.c">
       <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\filters\rewrite_adts.c">
+      <Filter>filters</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\filters\rewrite_mhas.c">
       <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\filters\rewrite_mp4v.c">
@@ -1404,6 +1425,12 @@
       <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\filters\dasher.c">
+      <Filter>filters</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\filters\bs_agg.c">
+      <Filter>filters</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\filters\bs_split.c">
       <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\filters\bsrw.c">
@@ -1439,6 +1466,9 @@
     <ClCompile Include="..\..\src\filters\tileagg.c">
       <Filter>filters</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\filters\tilesplit.c">
+      <Filter>filters</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\filters\encrypt_cenc_isma.c">
       <Filter>filters</Filter>
     </ClCompile>
@@ -1454,11 +1484,14 @@
     <ClCompile Include="..\..\src\utils\Remotery.c">
       <Filter>utils</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\src\filters\in_atsc.c">
+    <ClCompile Include="..\..\src\filters\in_route.c">
       <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\evg\ftgrays.c">
       <Filter>evg</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\filters\out_route.c">
+      <Filter>filters</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\filters\out_rtp.c">
       <Filter>filters</Filter>
@@ -1562,8 +1595,17 @@
     <ClCompile Include="..\..\src\filters\tssplit.c">
       <Filter>filters</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\filters\ttml_conv.c">
+      <Filter>filters</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\filters\write_tx3g.c">
+      <Filter>filters</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\filters\dec_mediacodec.c">
       <Filter>filters</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\quickjs\quickjs-libc.c">
+      <Filter>quickjs</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2021
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -64,7 +64,7 @@ The thread object allows executing some code independently of the main process o
 
 
  //atomic ref_count++ / ref_count--
-#if defined(WIN32) || defined(_WIN32_WCE)
+#if (defined(WIN32) || defined(_WIN32_WCE)) && !defined(__GNUC__)
 #include <windows.h>
 #include <winbase.h>
 
@@ -74,11 +74,11 @@ The thread object allows executing some code independently of the main process o
 #define safe_int_dec(__v) InterlockedDecrement((int *) (__v))
 /*! atomic integer addition */
 #define safe_int_add(__v, inc_val) InterlockedAdd((int *) (__v), inc_val)
-/*! atomic integer substraction */
+/*! atomic integer subtraction */
 #define safe_int_sub(__v, dec_val) InterlockedAdd((int *) (__v), -dec_val)
 /*! atomic large integer addition */
 #define safe_int64_add(__v, inc_val) InterlockedAdd64((LONG64 *) (__v), inc_val)
-/*! atomic large integer substraction */
+/*! atomic large integer subtraction */
 #define safe_int64_sub(__v, dec_val) InterlockedAdd64((LONG64 *) (__v), -dec_val)
 
 #else
@@ -91,11 +91,11 @@ The thread object allows executing some code independently of the main process o
 #define safe_int_dec(__v) __atomic_sub_fetch((int *) (__v), 1, __ATOMIC_SEQ_CST)
 /*! atomic integer addition */
 #define safe_int_add(__v, inc_val) __atomic_add_fetch((int *) (__v), inc_val, __ATOMIC_SEQ_CST)
-/*! atomic integer substraction */
+/*! atomic integer subtraction */
 #define safe_int_sub(__v, dec_val) __atomic_sub_fetch((int *) (__v), dec_val, __ATOMIC_SEQ_CST)
 /*! atomic large integer addition */
 #define safe_int64_add(__v, inc_val) __atomic_add_fetch((int64_t *) (__v), inc_val, __ATOMIC_SEQ_CST)
-/*! atomic large integer substraction */
+/*! atomic large integer subtraction */
 #define safe_int64_sub(__v, dec_val) __atomic_sub_fetch((int64_t *) (__v), dec_val, __ATOMIC_SEQ_CST)
 
 #else
@@ -106,11 +106,11 @@ The thread object allows executing some code independently of the main process o
 #define safe_int_dec(__v) __sync_sub_and_fetch((int *) (__v), 1)
 /*! atomic integer addition */
 #define safe_int_add(__v, inc_val) __sync_add_and_fetch((int *) (__v), inc_val)
-/*! atomic integer substraction */
+/*! atomic integer subtraction */
 #define safe_int_sub(__v, dec_val) __sync_sub_and_fetch((int *) (__v), dec_val)
 /*! atomic large integer addition */
 #define safe_int64_add(__v, inc_val) __sync_add_and_fetch((int64_t *) (__v), inc_val)
-/*! atomic large integer substraction */
+/*! atomic large integer subtraction */
 #define safe_int64_sub(__v, dec_val) __sync_sub_and_fetch((int64_t *) (__v), dec_val)
 
 #endif //GPAC_NEED_LIBATOMIC
@@ -266,30 +266,30 @@ GF_Mutex *gf_mx_new(const char *name);
 \brief mutex denstructor
 
 Destroys a mutex object. This will wait for the mutex to be released if needed.
-\param mx the mutex object
+\param mx the mutex object, may be NULL
 */
 void gf_mx_del(GF_Mutex *mx);
 /*!
 \brief mutex locking
 
 Locks the mutex object, making sure that another thread locking this mutex cannot execute until the mutex is unlocked.
-\param mx the mutex object
-\return 1 if success, 0 if error locking the mutex (which should never happen)
+\param mx the mutex object, may be NULL
+\return 1 if success or mutex is NULL, 0 if error locking the mutex (which should never happen)
 */
 u32 gf_mx_p(GF_Mutex *mx);
 /*!
 \brief mutex unlocking
 
 Unlocks the mutex object, allowing other threads waiting on this mutex to continue their execution
-\param mx the mutex object
+\param mx the mutex object, may be NULL
 */
 void gf_mx_v(GF_Mutex *mx);
 /*!
 \brief mutex non-blocking lock
 
 Attemps to lock the mutex object without blocking until the object is released.
-\param mx the mutex object
-\return GF_TRUE if the mutex has been successfully locked, in which case it shall then be unlocked, or GF_FALSE if the mutex is locked by another thread.
+\param mx the mutex object, may be NULL
+\return GF_TRUE if the mutex has been successfully locked or if the mutex is NULL, in which case it shall then be unlocked, or GF_FALSE if the mutex is locked by another thread.
 */
 Bool gf_mx_try_lock(GF_Mutex *mx);
 
@@ -297,8 +297,8 @@ Bool gf_mx_try_lock(GF_Mutex *mx);
 \brief get mutex number of locks
 
 Returns the number of locks on the mutex if the caller thread is holding the mutex.
-\param mx the mutex object
-\return -1 if the mutex is not hold by the calling thread, or the number of locks (possibly 0) otherwise.
+\param mx the mutex object, may be NULL
+\return -1 if the mutex is not hold by the calling thread, or the number of locks (possibly 0) otherwise. Returns 0 if mutex is NULL
  */
 s32 gf_mx_get_num_locks(GF_Mutex *mx);
 
@@ -309,7 +309,7 @@ s32 gf_mx_get_num_locks(GF_Mutex *mx);
 \brief Semaphore
 
 
-The semaphore object allows controling how portions of the code (typically access to variables) are
+The semaphore object allows controlling how portions of the code (typically access to variables) are
  executed by two threads (or a thread and the main process) at the same time. The best image for a semaphore is a limited set
  of money coins (always easy to understand hmm?). If no money is in the set, nobody can buy anything until a coin is put back in the set.
  When the set is full, the money is wasted (call it "the bank"...).

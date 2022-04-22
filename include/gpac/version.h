@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2012-2019
+ *			Copyright (c) Telecom ParisTech 2012-2022
  *					All rights reserved
  *
  *  This file is part of GPAC
@@ -42,9 +42,11 @@
  * SONAME versions must be digits (not strings)
  */
 /*! Macro giving GPAC version name expressed as a printable string*/
-#define GPAC_VERSION          "1.0.0"
+#define GPAC_VERSION          "2.1-DEV"
+
+// WARNING: when bumping, reflect the changes in share/python/libgpac.py !!
 /*! ABI Major number of libgpac */
-#define GPAC_VERSION_MAJOR 10
+#define GPAC_VERSION_MAJOR 11
 /*! ABI Minor number of libgpac */
 #define GPAC_VERSION_MINOR 0
 /*! ABI Micro number of libgpac */
@@ -59,6 +61,23 @@ const char *gf_gpac_version();
 \return GPAC copyright
 */
 const char *gf_gpac_copyright();
+
+/*! gets GPAC copyright + citations DOI
+\return GPAC copyright
+*/
+const char *gf_gpac_copyright_cite();
+
+/*!gets libgpac ABI major version
+\return major number of libgpac ABI version*/
+u32 gf_gpac_abi_major();
+
+/*!gets libgpac ABI minor version
+\return minor number of libgpac ABI version*/
+u32 gf_gpac_abi_minor();
+
+/*!gets libgpac ABI major version
+\return micro number of libgpac ABI version*/
+u32 gf_gpac_abi_micro();
 
 /*! @} */
 

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2020
+ *			Copyright (c) Telecom ParisTech 2005-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / NHNT demuxer filter
@@ -111,6 +111,10 @@ GF_Err vobsubdmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_rem
 		if (!strncmp(p->value.string, "gfio://", 7)) {
 			use_gfio = GF_TRUE;
 			strcpy(sURL, gf_fileio_translate_url(p->value.string) );
+
+			if (gf_fileio_is_main_thread(p->value.string)) {
+				gf_filter_force_main_thread(filter, GF_TRUE);
+			}
 		} else {
 			strcpy(sURL, p->value.string);
 		}
@@ -236,6 +240,7 @@ GF_Err vobsubdmx_parse_idx(GF_Filter *filter, GF_VOBSubDmxCtx *ctx)
 			gf_filter_pid_set_property(opid, GF_PROP_PID_HEIGHT, &PROP_UINT(ctx->vobsub->height) );
 			gf_filter_pid_set_property(opid, GF_PROP_PID_LANGUAGE, &PROP_STRING(ctx->vobsub->langs[i].name) );
 			gf_filter_pid_set_property(opid, GF_PROP_PID_DURATION, &PROP_FRAC64(ctx->duration) );
+			gf_filter_pid_set_property(opid, GF_PROP_PID_PLAYBACK_MODE, &PROP_UINT(GF_PLAYBACK_MODE_FASTFORWARD ) );
 
 			gf_filter_pid_set_udta(opid, &ctx->vobsub->langs[i]);
 		}
@@ -274,22 +279,22 @@ static GF_Err vobsubdmx_send_stream(GF_VOBSubDmxCtx *ctx, GF_FilterPid *pid)
 
 		gf_fseek(ctx->mdia, pos->filepos, SEEK_SET);
 		if (gf_ftell(ctx->mdia) != pos->filepos) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[VobSub] Could not seek in file\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[VobSub] Could not seek in file\n"));
 			return GF_IO_ERR;
 		}
 
 		if (!gf_fread(buf, sizeof(buf), ctx->mdia)) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[VobSub] Could not read from file\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[VobSub] Could not read from file\n"));
 			return GF_IO_ERR;
 		}
 
 		if (*(u32*)&buf[0x00] != 0xba010000		   ||
-		        *(u32*)&buf[0x0e] != 0xbd010000		   ||
+			    (buf[14] || buf[15] || (buf[16]!=0x01) || (buf[17]!=0xbd)) ||
 		        !(buf[0x15] & 0x80)				   ||
 		        (buf[0x17] & 0xf0) != 0x20			   ||
 		        (buf[buf[0x16] + 0x17] & 0xe0) != 0x20)
 		{
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[VobSub] Corrupted data found in file (1)\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[VobSub] Corrupted data found in file (1)\n"));
 			return GF_CORRUPTED_DATA;
 		}
 
@@ -298,10 +303,8 @@ static GF_Err vobsubdmx_send_stream(GF_VOBSubDmxCtx *ctx, GF_FilterPid *pid)
 
 		if (ctx->blankframe && !c && (pos->start>0)) {
 			dst_pck = gf_filter_pck_new_alloc(pid, sizeof(null_subpic), &packet);
-			if (!dst_pck) {
-				GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[VobSub] Memory allocation failed\n"));
-				return GF_OUT_OF_MEM;
-			}
+			if (!dst_pck) return GF_OUT_OF_MEM;
+
 			memcpy(packet, null_subpic, sizeof(null_subpic));
 			gf_filter_pck_set_cts(dst_pck, 0);
 			gf_filter_pck_set_sap(dst_pck, GF_FILTER_SAP_1);
@@ -310,10 +313,7 @@ static GF_Err vobsubdmx_send_stream(GF_VOBSubDmxCtx *ctx, GF_FilterPid *pid)
 		}
 
 		dst_pck = gf_filter_pck_new_alloc(pid, psize, &packet);
-		if (!dst_pck) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[VobSub] Memory allocation failed\n"));
-			return GF_OUT_OF_MEM;
-		}
+		if (!dst_pck) return GF_OUT_OF_MEM;
 
 		for (i = 0, left = psize; i < psize; i += size, left -= size) {
 			hsize = 0x18 + buf[0x16];
@@ -330,12 +330,12 @@ static GF_Err vobsubdmx_send_stream(GF_VOBSubDmxCtx *ctx, GF_FilterPid *pid)
 		}
 
 		if (i != psize || left > 0) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[VobSub] Corrupted data found in file (2)\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[VobSub] Corrupted data found in file (2)\n"));
 			return GF_CORRUPTED_DATA;
 		}
 
 		if (vobsub_get_subpic_duration(packet, psize, dsize, &duration) != GF_OK) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[VobSub] Corrupted data found in file (3)\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[VobSub] Corrupted data found in file (3)\n"));
 			return GF_CORRUPTED_DATA;
 		}
 
@@ -344,7 +344,7 @@ static GF_Err vobsubdmx_send_stream(GF_VOBSubDmxCtx *ctx, GF_FilterPid *pid)
 		gf_filter_pck_set_duration(dst_pck, duration);
 
 		if (vslang->last_dts && (vslang->last_dts >= pos->start * 90)) {
-			GF_LOG(GF_LOG_WARNING, GF_LOG_PARSER, ("[VobSub] Out of order timestamps in vobsub file\n"));
+			GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[VobSub] Out of order timestamps in vobsub file\n"));
 		}
 		gf_filter_pck_send(dst_pck);
 		vslang->last_dts = pos->start * 90;
@@ -387,7 +387,7 @@ GF_Err vobsubdmx_process(GF_Filter *filter)
 		p = gf_filter_pid_get_property(ctx->sub_pid, GF_PROP_PID_FILEPATH);
 		if (!p) {
 			gf_filter_setup_failure(filter, GF_URL_ERROR);
-			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[VobSub] Cannot open sub file\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[VobSub] Cannot open sub file\n"));
 			return GF_EOS;
 		}
 		ctx->mdia = gf_fopen(p->value.string, "rb");
@@ -459,8 +459,8 @@ static const GF_FilterCapability VOBSubDmxCaps[] =
 
 GF_FilterRegister VOBSubDmxRegister = {
 	.name = "vobsubdmx",
-	GF_FS_SET_DESCRIPTION("VobSub demuxer")
-	GF_FS_SET_HELP("This filter demultiplexes VobSub files/data to produce media PIDs and frames.")
+	GF_FS_SET_DESCRIPTION("VobSub parser")
+	GF_FS_SET_HELP("This filter parses VobSub files/data to produce media PIDs and frames.")
 	.private_size = sizeof(GF_VOBSubDmxCtx),
 	.max_extra_pids = 1,
 	.args = GF_VOBSubDmxArgs,

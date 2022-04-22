@@ -46,6 +46,7 @@ static void audioclip_activate(AudioClipStack *st, M_AudioClip *ac)
 static void audioclip_deactivate(AudioClipStack *st, M_AudioClip *ac)
 {
 	gf_sc_audio_stop(&st->input);
+	gf_sc_audio_unregister(&st->input);
 	ac->isActive = 0;
 	gf_node_event_out((GF_Node *)ac, 7/*"isActive"*/);
 
@@ -368,7 +369,7 @@ static void audiobuffer_traverse(GF_Node *node, void *rs, Bool is_destroy)
 
 	if (update_mixer) {
 		gf_mixer_remove_all(st->am);
-		gf_mixer_force_chanel_out(st->am, ab->numChan);
+		gf_mixer_force_channel_out(st->am, ab->numChan);
 	}
 
 	while (gf_list_count(st->new_inputs)) {
@@ -380,7 +381,7 @@ static void audiobuffer_traverse(GF_Node *node, void *rs, Bool is_destroy)
 	gf_mixer_lock(st->am, GF_FALSE);
 	tr_state->audio_parent = parent;
 
-	/*Note the audio buffer is ALWAYS registered untill destroyed since buffer filling shall happen even when inactive*/
+	/*Note the audio buffer is ALWAYS registered until destroyed since buffer filling shall happen even when inactive*/
 	if (!st->output.register_with_parent || !st->output.register_with_renderer)
 		gf_sc_audio_register(&st->output, tr_state);
 
@@ -536,6 +537,7 @@ static Bool audiobuffer_get_config(GF_AudioInterface *aifc, Bool for_reconf)
 			aifc->afmt = GF_AUDIO_FMT_U8;
 			break;
 		case GF_AUDIO_FMT_S16P:
+		case GF_AUDIO_FMT_S16_BE:
 			aifc->afmt = GF_AUDIO_FMT_S16;
 			break;
 		case GF_AUDIO_FMT_S24P:

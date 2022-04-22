@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / OpenGL tools used by compositor filter, vout filter and WebGL bindings
@@ -334,90 +334,122 @@ void gf_opengl_init()
 
 }
 
+static char *gl_shader_yuv_matrix = \
+"uniform mat4 _gf_%s_mx;\n\
+";
 
+
+#if 0 //old code
+static char *gl_shader_yuv_coefs = \
+"const vec3 offset = vec3(-0.0625, -0.5, -0.5);\n\
+const vec3 R_mul = vec3(1.164,  0.000,  1.596);\n\
+const vec3 G_mul = vec3(1.164, -0.391, -0.813);\n\
+const vec3 B_mul = vec3(1.164,  2.018,  0.000);\n\
+";
+
+static char *gl_shader_yuv_coefs_jpeg = \
+"const vec3 offset = vec3(0.0, -0.5, -0.5);\n\
+const vec3 R_mul = vec3(1,  0.000,  1.40200);\n\
+const vec3 G_mul = vec3(1, -0.34414, -0.71414);\n\
+const vec3 B_mul = vec3(1,  1.77200,  0.000);\n\
+";
+#endif
 
 static char *gl_shader_vars_yuv = \
 "uniform sampler2D _gf_%s_1;\n\
 uniform sampler2D _gf_%s_2;\n\
 uniform sampler2D _gf_%s_3;\n\
-const vec3 offset = vec3(-0.0625, -0.5, -0.5);\n\
-const vec3 R_mul = vec3(1.164,  0.000,  1.596);\n\
-const vec3 G_mul = vec3(1.164, -0.391, -0.813);\n\
-const vec3 B_mul = vec3(1.164,  2.018,  0.000);\n\
 ";
 
 static char *gl_shader_fun_yuv = \
 "vec2 texc;\n\
-vec3 yuv, rgb;\n\
+vec4 yuv;\n\
 texc = _gpacTexCoord.st;\n\
 yuv.x = texture2D(_gf_%s_1, texc).r;\n\
 yuv.y = texture2D(_gf_%s_2, texc).r;\n\
 yuv.z = texture2D(_gf_%s_3, texc).r;\n\
-yuv += offset;\n\
-rgb.r = dot(yuv, R_mul);\n\
-rgb.g = dot(yuv, G_mul);\n\
-rgb.b = dot(yuv, B_mul);\n\
-return vec4(rgb, 1.0);\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
+";
+
+static char *gl_shader_fun_yvu = \
+"vec2 texc;\n\
+vec4 yuv;\n\
+texc = _gpacTexCoord.st;\n\
+yuv.x = texture2D(_gf_%s_1, texc).r;\n\
+yuv.y = texture2D(_gf_%s_3, texc).r;\n\
+yuv.z = texture2D(_gf_%s_2, texc).r;\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
+";
+static char *gl_shader_vars_yuva = \
+"uniform sampler2D _gf_%s_1;\n\
+uniform sampler2D _gf_%s_2;\n\
+uniform sampler2D _gf_%s_3;\n\
+uniform sampler2D _gf_%s_4;\n\
+";
+
+static char *gl_shader_fun_yuva = \
+"vec2 texc;\n\
+vec4 yuv;\n\
+texc = _gpacTexCoord.st;\n\
+yuv.x = texture2D(_gf_%s_1, texc).r;\n\
+yuv.y = texture2D(_gf_%s_2, texc).r;\n\
+yuv.z = texture2D(_gf_%s_3, texc).r;\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = texture2D(_gf_%s_4, texc).r;\n\
+return yuv;\n\
 ";
 
 static char *gl_shader_vars_nv12 = \
 "uniform sampler2D _gf_%s_1;\n\
 uniform sampler2D _gf_%s_2;\n\
-const vec3 offset = vec3(-0.0625, -0.5, -0.5);\n\
-const vec3 R_mul = vec3(1.164,  0.000,  1.596);\n\
-const vec3 G_mul = vec3(1.164, -0.391, -0.813);\n\
-const vec3 B_mul = vec3(1.164,  2.018,  0.000);\n\
 ";
 
 static char *gl_shader_fun_nv12 = \
 "vec2 texc;\n\
-vec3 yuv, rgb;\n\
+vec4 yuv;\n\
 texc = _gpacTexCoord.st;\n\
 yuv.x = texture2D(_gf_%s_1, texc).r;\n\
 yuv.yz = texture2D(_gf_%s_2, texc).ra;\n\
-yuv += offset;\n\
-rgb.r = dot(yuv, R_mul);\n\
-rgb.g = dot(yuv, G_mul);\n\
-rgb.b = dot(yuv, B_mul);\n\
-return vec4(rgb, 1.0);\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
 ";
 
 
 static char *gl_shader_vars_nv21 = \
 "uniform sampler2D _gf_%s_1;\n\
 uniform sampler2D _gf_%s_2;\n\
-const vec3 offset = vec3(-0.0625, -0.5, -0.5);\n\
-const vec3 R_mul = vec3(1.164,  0.000,  1.596);\n\
-const vec3 G_mul = vec3(1.164, -0.391, -0.813);\n\
-const vec3 B_mul = vec3(1.164,  2.018,  0.000);\n\
 ";
 
 static char *gl_shader_fun_nv21 = \
 "vec2 texc;\n\
-vec3 yuv, rgb;\n\
+vec4 yuv;\n\
 texc = _gpacTexCoord.st;\n\
 yuv.x = texture2D(_gf_%s_1, texc).r;\n\
 yuv.yz = texture2D(_gf_%s_2, texc).ar;\n\
-yuv += offset;\n\
-rgb.r = dot(yuv, R_mul);\n\
-rgb.g = dot(yuv, G_mul);\n\
-rgb.b = dot(yuv, B_mul);\n\
-return vec4(rgb, 1.0);\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
 ";
 
 
 static char *gl_shader_vars_uyvu = \
-	"uniform sampler2D _gf_%s_1;\
-	uniform float _gf_%s_width;\
-	const vec3 offset = vec3(-0.0625, -0.5, -0.5);\
-	const vec3 R_mul = vec3(1.164,  0.000,  1.596);\
-	const vec3 G_mul = vec3(1.164, -0.391, -0.813);\
-	const vec3 B_mul = vec3(1.164,  2.018,  0.000);\
-	";
+"uniform sampler2D _gf_%s_1;\
+uniform float _gf_%s_width;\
+";
 
 static char *gl_shader_fun_uyvy = \
 "vec2 texc, t_texc;\
-vec3 yuv, rgb;\
+vec4 yuv;\
 vec4 uyvy;\
 float tex_s;\
 texc = _gpacTexCoord.st;\
@@ -430,17 +462,16 @@ if (tex_s - (2.0 * floor(tex_s/2.0)) == 1.0) {\
 yuv.r = uyvy.g;\
 yuv.g = uyvy.r;\
 yuv.b = uyvy.b;\
-yuv += offset; \
-rgb.r = dot(yuv, R_mul); \
-rgb.g = dot(yuv, G_mul); \
-rgb.b = dot(yuv, B_mul); \
-return vec4(rgb, 1.0);\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
 ";
 
 
 static char *gl_shader_fun_vyuy = \
 "vec2 texc, t_texc;\
-vec3 yuv, rgb;\
+vec4 yuv;\
 vec4 vyuy;\
 float tex_s;\
 texc = _gpacTexCoord.st;\
@@ -453,17 +484,16 @@ if (tex_s - (2.0 * floor(tex_s/2.0)) == 1.0) {\
 yuv.r = vyuy.g;\
 yuv.g = vyuy.b;\
 yuv.b = vyuy.r;\
-yuv += offset; \
-rgb.r = dot(yuv, R_mul); \
-rgb.g = dot(yuv, G_mul); \
-rgb.b = dot(yuv, B_mul); \
-return vec4(rgb, 1.0);\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
 ";
 
 
 static char *gl_shader_fun_yuyv = \
 "vec2 texc, t_texc;\
-vec3 yuv, rgb;\
+vec4 yuv;\
 vec4 yvyu;\
 float tex_s;\
 texc = _gpacTexCoord.st;\
@@ -476,16 +506,15 @@ if (tex_s - (2.0 * floor(tex_s/2.0)) == 1.0) {\
 yuv.r = yvyu.r;\
 yuv.g = yvyu.g;\
 yuv.b = yvyu.a;\
-yuv += offset; \
-rgb.r = dot(yuv, R_mul); \
-rgb.g = dot(yuv, G_mul); \
-rgb.b = dot(yuv, B_mul); \
-return vec4(rgb, 1.0);\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
 ";
 
 static char *gl_shader_fun_yvyu = \
 "vec2 texc, t_texc;\
-vec3 yuv, rgb;\
+vec4 yuv;\
 vec4 yuyv;\
 float tex_s;\
 texc = _gpacTexCoord.st;\
@@ -498,12 +527,189 @@ if (tex_s - (2.0 * floor(tex_s/2.0)) == 1.0) {\
 yuv.r = yuyv.r;\
 yuv.g = yuyv.a;\
 yuv.b = yuyv.g;\
-yuv += offset; \
-rgb.r = dot(yuv, R_mul); \
-rgb.g = dot(yuv, G_mul); \
-rgb.b = dot(yuv, B_mul); \
-return vec4(rgb, 1.0);\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
 ";
+
+
+
+static char *gl_shader_vars_yuv4_pack = \
+"uniform sampler2D _gf_%s_1;\n\
+";
+
+static char *gl_shader_fun_yuv4_pack = \
+"vec2 texc;\n\
+vec4 yuv;\n\
+texc = _gpacTexCoord.st;\n\
+yuv = texture2D(_gf_%s_1, texc);\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
+";
+
+static char *gl_shader_fun_vyu4_pack = \
+"vec2 texc;\n\
+vec4 yuv;\n\
+texc = _gpacTexCoord.st;\n\
+yuv.rgb = texture2D(_gf_%s_1, texc).gbr;\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
+";
+
+
+static char *gl_shader_fun_yuv4a_pack = \
+"vec2 texc;\n\
+vec4 tex;\n\
+vec4 yuv;\n\
+texc = _gpacTexCoord.st;\n\
+tex = texture2D(_gf_%s_1, texc);\n\
+yuv.rgb = tex.rgb;\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = tex.a;\n\
+return yuv;\n\
+";
+
+static char *gl_shader_fun_uyv4a_pack = \
+"vec2 texc;\n\
+vec4 tex;\n\
+vec4 yuv;\n\
+texc = _gpacTexCoord.st;\n\
+tex = texture2D(_gf_%s_1, texc);\n\
+yuv.rgb = tex.grb;\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = tex.a;\n\
+return yuv;\n\
+";
+
+//uploaded as RGBA describing 10 bit V + 10 bit Y + 10 bit U + 2 bits lost, lost bits in R (first byte)
+//V: 8 bit A + 2 bits B
+//Y: 6 bit B + 4 bits G
+//U: 4 bit G + 6 bits R
+//
+//we do the maths for bit reading, we should add support for GLES3 shift operators as well (but no support in WebGL1)
+static char *gl_shader_fun_yuv4_10_pack = \
+"vec2 texc;\n\
+vec4 val;\n\
+int valr, valg, valb, vala, interm1, interm2;\n\
+vec4 yuv;\n\
+texc = _gpacTexCoord.st;\n\
+val = texture2D(_gf_%s_1, texc).rgba;\n\
+vala = int(val.a*255.0);\n\
+valb = int(val.b*255.0);\n\
+valg = int(val.g*255.0);\n\
+valr = int(val.r*255.0 / 64.0);\n\
+interm1 = valb / 64;\n\
+yuv.b = float( (vala * 4) + (interm1) ) / 1023.0;\n\
+interm1 *= 64;\n\
+interm2 = valg / 16;\n\
+yuv.r = float( ((valb - interm1) * 16) + (interm2) ) / 1023.0;\n\
+interm2 *= 16;\n\
+yuv.g = float( ((valg - interm2) * 64) + valr ) / 1023.0;\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
+";
+
+
+static char *gl_shader_vars_v210 = \
+"uniform sampler2D _gf_%s_1;\
+uniform float _gf_%s_width;\
+uniform float _gf_%s_gpu_width;\
+";
+
+//uploaded as RGBA describing 2 bits lost (in A, last byte) + 3 * 10 bit {U,Y,V} , pattern reapeating 6 times
+//first pattern (x%6==0) is {00b, Cr, Y, Cb} in {A, B, G, R} bytes
+//we decompose RGBA pixel x and x+1 as follows
+//.R: 8 bit R + 2 bits G
+//.G: 6 bit G + 4 bits B
+//.B: 4 bit G + 6 bits A
+//
+//s coordinate is remapped to line pos x in source width pixels
+//the GPU sees the texture as a {stride/4, height} texture
+//so when we fetch from sampler2D we need to convert 6 pixels v210 to 4 pixels RGBA for x
+//but the next pixel we need is 1/gpu_width after x
+//
+//we do the maths for bit reading, we should add support for GLES3 shift operators as well (but no support in WebGL1)
+static char *gl_shader_fun_v210 = \
+"vec2 texc;\n\
+vec4 yuv, yuv1, yuv2, val;\n\
+int x, off_x, dec_x, valr, valg, valb, vala, interm1, interm2;\n\
+float tx_width = _gf_%s_width;\n\
+float tx_gpu_width = _gf_%s_gpu_width;\n\
+x = int(_gpacTexCoord.s * tx_width);\n\
+interm1 = x/6;\n\
+off_x = x - (interm1 * 6);\n\
+x-=off_x;\n\
+if (off_x>=4) dec_x = 2;\n\
+else if (off_x>=2) dec_x = 1;\n\
+else dec_x = 0;\n\
+texc.t = _gpacTexCoord.t;\n\
+texc.s = float(x * 4 / 6 + dec_x) / tx_gpu_width;\n\
+val = texture2D(_gf_%s_1, texc);\n\
+vala = int(val.a*255.0);\n\
+valb = int(val.b*255.0);\n\
+valg = int(val.g*255.0);\n\
+valr = int(val.r*255.0);\n\
+vala = vala - ((vala/64) * 64);\n\
+interm1 = valg / 4;\n\
+yuv1.r = float( valr + (valg - interm1*4)*256 ) / 1023.0;\n\
+interm2 = valb / 16;\n\
+yuv1.g = float( (valb - interm2*16) * 64 + interm1 ) / 1023.0;\n\
+yuv1.b = float( interm2 + vala*16 ) / 1023.0;\n\
+if (off_x==0) {\n\
+yuv.g = yuv1.r;\n\
+yuv.r = yuv1.g;\n\
+yuv.b = yuv1.b;\n\
+} else {\n\
+texc.s = float(x * 4 / 6 + dec_x + 1) / tx_gpu_width;\n\
+val = texture2D(_gf_%s_1, texc);\n\
+vala = int(val.a*255.0);\n\
+valb = int(val.b*255.0);\n\
+valg = int(val.g*255.0);\n\
+valr = int(val.r*255.0);\n\
+vala = vala - ((vala/64) * 64);\n\
+interm1 = valg / 4;\n\
+yuv2.r = float( valr + (valg - interm1*4)*256 ) / 1023.0;\n\
+interm2 = valb / 16;\n\
+yuv2.g = float( (valb - interm2*16) * 64 + interm1 ) / 1023.0;\n\
+yuv2.b = float( interm2 + vala*16 ) / 1023.0;\n\
+if (off_x==1) {\n\
+yuv.g = yuv1.r;\n\
+yuv.r = yuv2.r;\n\
+yuv.b = yuv1.b;\n\
+} else if (off_x==2) {\n\
+yuv.g = yuv1.g;\n\
+yuv.r = yuv1.b;\n\
+yuv.b = yuv2.r;\n\
+} else if (off_x==3) {\n\
+yuv.g = yuv1.g;\n\
+yuv.r = yuv2.g;\n\
+yuv.b = yuv2.r;\n\
+} else if (off_x==4) {\n\
+yuv.g = yuv1.b;\n\
+yuv.r = yuv2.r;\n\
+yuv.b = yuv2.g;\n\
+} else {\n\
+yuv.g = yuv1.b;\n\
+yuv.r = yuv2.b;\n\
+yuv.b = yuv2.g;\n\
+}\n\
+}\n\
+yuv.w = 1.0;\n\
+yuv = _gf_%s_mx * yuv;\n\
+yuv.w = 1.0;\n\
+return yuv;\n\
+";
+
+
 
 static char *gl_shader_vars_rgb = \
 "uniform sampler2D _gf_%s_1;\n\
@@ -611,8 +817,7 @@ static char *gl_shader_vars_externalOES = \
 ";
 
 
-
-Bool gf_gl_txw_insert_fragment_shader(u32 pix_fmt, const char *tx_name, char **f_source)
+Bool gf_gl_txw_insert_fragment_shader(u32 pix_fmt, const char *tx_name, char **f_source, Bool y_flip)
 {
 	char szCode[4000];
 	const char *shader_vars = NULL;
@@ -630,20 +835,48 @@ Bool gf_gl_txw_insert_fragment_shader(u32 pix_fmt, const char *tx_name, char **f
 		shader_fun = gl_shader_fun_nv12;
 		break;
 	case GF_PIXEL_UYVY:
+	case GF_PIXEL_UYVY_10:
 		shader_vars = gl_shader_vars_uyvu;
 		shader_fun = gl_shader_fun_uyvy;
 		break;
 	case GF_PIXEL_YUYV:
+	case GF_PIXEL_YUYV_10:
 		shader_vars = gl_shader_vars_uyvu; //same as uyvy
 		shader_fun = gl_shader_fun_yuyv;
 		break;
 	case GF_PIXEL_VYUY:
+	case GF_PIXEL_VYUY_10:
 		shader_vars = gl_shader_vars_uyvu; //same as uyvy
 		shader_fun = gl_shader_fun_vyuy;
 		break;
 	case GF_PIXEL_YVYU:
+	case GF_PIXEL_YVYU_10:
 		shader_vars = gl_shader_vars_uyvu; //same as uyvy
 		shader_fun = gl_shader_fun_yvyu;
+		break;
+	case GF_PIXEL_YUV444_PACK:
+		shader_vars = gl_shader_vars_yuv4_pack;
+		shader_fun = gl_shader_fun_yuv4_pack;
+		break;
+	case GF_PIXEL_VYU444_PACK:
+		shader_vars = gl_shader_vars_yuv4_pack;
+		shader_fun = gl_shader_fun_vyu4_pack;
+		break;
+	case GF_PIXEL_YUVA444_PACK:
+		shader_vars = gl_shader_vars_yuv4_pack;
+		shader_fun = gl_shader_fun_yuv4a_pack;
+		break;
+	case GF_PIXEL_UYVA444_PACK:
+		shader_vars = gl_shader_vars_yuv4_pack;
+		shader_fun = gl_shader_fun_uyv4a_pack;
+		break;
+	case GF_PIXEL_YUV444_10_PACK:
+		shader_vars = gl_shader_vars_yuv4_pack;
+		shader_fun = gl_shader_fun_yuv4_10_pack;
+		break;
+	case GF_PIXEL_V210:
+		shader_vars = gl_shader_vars_v210;
+		shader_fun = gl_shader_fun_v210;
 		break;
 	case GF_PIXEL_ALPHAGREY:
 		shader_vars = gl_shader_vars_rgb;
@@ -680,15 +913,22 @@ Bool gf_gl_txw_insert_fragment_shader(u32 pix_fmt, const char *tx_name, char **f
 
 	case GF_PIXEL_YUV:
 	case GF_PIXEL_YUV_10:
-	case GF_PIXEL_YUVA:
 	case GF_PIXEL_YUVD:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
-	case GF_PIXEL_YUVA444:
 	case GF_PIXEL_YUV444:
 	case GF_PIXEL_YUV444_10:
 		shader_vars = gl_shader_vars_yuv;
 		shader_fun = gl_shader_fun_yuv;
+		break;
+	case GF_PIXEL_YVU:
+		shader_vars = gl_shader_vars_yuv;
+		shader_fun = gl_shader_fun_yvu;
+		break;
+	case GF_PIXEL_YUVA:
+	case GF_PIXEL_YUVA444:
+		shader_vars = gl_shader_vars_yuva;
+		shader_fun = gl_shader_fun_yuva;
 		break;
 	case GF_PIXEL_GL_EXTERNAL:
 		shader_vars = gl_shader_vars_externalOES;
@@ -701,15 +941,25 @@ Bool gf_gl_txw_insert_fragment_shader(u32 pix_fmt, const char *tx_name, char **f
 	}
 
 	if (!shader_vars || !shader_fun) return GF_FALSE;
-	/*format with max 3 tx_name (for yuv)*/
-	sprintf(szCode, shader_vars, tx_name, tx_name, tx_name);
+	/*format with max 4 tx_name (for yuva)*/
+	sprintf(szCode, shader_vars, tx_name, tx_name, tx_name, tx_name);
 	gf_dynstrcat(f_source, szCode, NULL);
+
+	if (gf_pixel_fmt_is_yuv(pix_fmt)) {
+//		gf_dynstrcat(f_source, gl_shader_yuv_matrix, NULL);
+
+		sprintf(szCode, gl_shader_yuv_matrix, tx_name);
+		gf_dynstrcat(f_source, szCode, NULL);
+	}
 
 	gf_dynstrcat(f_source, "\nvec4 ", NULL);
 	gf_dynstrcat(f_source, tx_name, NULL);
 	gf_dynstrcat(f_source, "_sample(vec2 _gpacTexCoord) {\n", NULL);
-	/*format with max 3 tx_name (for yuv)*/
-	sprintf(szCode, shader_fun, tx_name, tx_name, tx_name);
+	if (y_flip) {
+		gf_dynstrcat(f_source, "_gpacTexCoord.t = 1.0 - _gpacTexCoord.t;\n", NULL);
+	}
+	/*format with max 4 tx_name (for yuva) + matrix for yuv*/
+	sprintf(szCode, shader_fun, tx_name, tx_name, tx_name, tx_name, tx_name);
 
 	gf_dynstrcat(f_source, szCode, NULL);
 	gf_dynstrcat(f_source, "\n}\n", NULL);
@@ -718,7 +968,7 @@ Bool gf_gl_txw_insert_fragment_shader(u32 pix_fmt, const char *tx_name, char **f
 }
 
 
-Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height, u32 stride, u32 uv_stride, Bool linear_interp, GF_FilterFrameInterface *frame_ifce)
+Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height, u32 stride, u32 uv_stride, Bool linear_interp, GF_FilterFrameInterface *frame_ifce, Bool full_range, s32 matrix_coef_or_neg)
 {
 	u32 i;
 
@@ -733,17 +983,27 @@ Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height
 	tx->bit_depth = 8;
 	tx->gl_format = GL_LUMINANCE;
 	tx->bytes_per_pix = 1;
+	tx->fullrange = full_range;
+	if (matrix_coef_or_neg==GF_CICP_MX_UNSPECIFIED)
+		tx->mx_cicp = -1;
+	else
+		tx->mx_cicp = matrix_coef_or_neg;
 
 	switch (tx->pix_fmt) {
 	case GF_PIXEL_YUV444_10:
 		tx->bit_depth = 10;
 	case GF_PIXEL_YUV444:
+	case GF_PIXEL_YUVA444:
 		tx->uv_w = tx->width;
 		tx->uv_h = tx->height;
 		if (!tx->uv_stride)
 			tx->uv_stride = tx->stride;
 		tx->is_yuv = GF_TRUE;
 		tx->nb_textures = 3;
+		if (tx->pix_fmt==GF_PIXEL_YUVA444) {
+			tx->nb_textures = 4;
+			tx->has_alpha = GF_TRUE;
+		}
 		break;
 	case GF_PIXEL_YUV422_10:
 		tx->bit_depth = 10;
@@ -758,6 +1018,8 @@ Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height
 	case GF_PIXEL_YUV_10:
 		tx->bit_depth = 10;
 	case GF_PIXEL_YUV:
+	case GF_PIXEL_YVU:
+	case GF_PIXEL_YUVA:
 		tx->uv_w = tx->width/2;
 		if (tx->width % 2) tx->uv_w++;
 		tx->uv_h = tx->height/2;
@@ -768,6 +1030,10 @@ Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height
 		}
 		tx->is_yuv = GF_TRUE;
 		tx->nb_textures = 3;
+		if (tx->pix_fmt==GF_PIXEL_YUVA) {
+			tx->nb_textures = 4;
+			tx->has_alpha = GF_TRUE;
+		}
 		break;
 	case GF_PIXEL_NV12_10:
 	case GF_PIXEL_NV21_10:
@@ -781,6 +1047,11 @@ Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height
 		tx->is_yuv = GF_TRUE;
 		tx->nb_textures = 2;
 		break;
+	case GF_PIXEL_UYVY_10:
+	case GF_PIXEL_YUYV_10:
+	case GF_PIXEL_YVYU_10:
+	case GF_PIXEL_VYUY_10:
+		tx->bit_depth = 16;
 	case GF_PIXEL_UYVY:
 	case GF_PIXEL_YUYV:
 	case GF_PIXEL_YVYU:
@@ -790,6 +1061,27 @@ Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height
 		if (!tx->uv_stride) {
 			tx->uv_stride = tx->stride/2;
 			if (tx->stride%2) tx->uv_stride ++;
+		}
+		tx->is_yuv = GF_TRUE;
+		tx->nb_textures = 1;
+		break;
+	case GF_PIXEL_V210:
+		tx->is_yuv = GF_TRUE;
+		tx->nb_textures = 1;
+		if (!tx->stride)
+			gf_pixel_get_size_info(tx->pix_fmt, width, height, NULL, &tx->stride, NULL, NULL, NULL);
+		break;
+
+	case GF_PIXEL_YUVA444_PACK:
+	case GF_PIXEL_UYVA444_PACK:
+		tx->has_alpha = GF_TRUE;
+	case GF_PIXEL_YUV444_PACK:
+	case GF_PIXEL_VYU444_PACK:
+	case GF_PIXEL_YUV444_10_PACK:
+		tx->uv_w = tx->width;
+		tx->uv_h = tx->height;
+		if (!tx->uv_stride) {
+			tx->uv_stride = tx->stride;
 		}
 		tx->is_yuv = GF_TRUE;
 		tx->nb_textures = 1;
@@ -851,7 +1143,7 @@ Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height
 		tx->internal_textures = GF_FALSE;
 		break;
 	default:
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] Pixel format %s unknown, cannot setup texture wrapper\n", gf_4cc_to_str(tx->pix_fmt)));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] Pixel format %s unsupported, cannot setup texture wrapper\n", gf_4cc_to_str(tx->pix_fmt)));
 		return GF_FALSE;
 	}
 
@@ -911,6 +1203,7 @@ Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glmode);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, glmode);
 #endif
+			GL_CHECK_ERR()
 		}
 
 
@@ -977,14 +1270,23 @@ Bool gf_gl_txw_upload(GF_GLTextureWrapper *tx, const u8 *data, GF_FilterFrameInt
 	if (!frame_ifce) {
 		if (tx->is_yuv) {
 			if (tx->nb_textures==2) {
-				pU = data + tx->stride * tx->height;
-			} else if (tx->nb_textures==3) {
+				if (tx->has_alpha) {
+					pA = data + tx->stride * tx->height;
+				} else {
+					pU = data + tx->stride * tx->height;
+				}
+			} else if (tx->nb_textures>=3) {
 				pU = data + tx->stride * tx->height;
 				pV = pU + tx->uv_stride * tx->uv_h;
+				if (tx->nb_textures==4) {
+					pA = pV + tx->uv_stride * tx->uv_h;
+				}
 			}
 		}
 	} else {
 		u32 st_o;
+		if (!frame_ifce->get_plane)
+			return GF_FALSE;
 		if (tx->nb_textures)
 			frame_ifce->get_plane(frame_ifce, 0, &data, &stride_luma);
 		if (tx->nb_textures>1)
@@ -1062,7 +1364,25 @@ Bool gf_gl_txw_upload(GF_GLTextureWrapper *tx, const u8 *data, GF_FilterFrameInt
 				glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, tx->PBOs[0]);
 				ptr =(u8 *)glMapBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, GL_WRITE_ONLY_ARB);
 
-				linesize = tx->width/2 * tx->bytes_per_pix * 4;
+				switch (tx->pix_fmt) {
+				case  GF_PIXEL_YUV444_PACK:
+				case  GF_PIXEL_VYU444_PACK:
+					linesize = 3 * tx->width;
+					break;
+				case GF_PIXEL_YUVA444_PACK:
+				case GF_PIXEL_UYVA444_PACK:
+					linesize = 4 * tx->width;
+					break;
+				case GF_PIXEL_YUV444_10_PACK:
+					linesize = 4 * tx->width;
+					break;
+				case GF_PIXEL_V210:
+					linesize = tx->width * 16 / 6;
+					break;
+				default:
+					linesize = tx->width/2 * tx->bytes_per_pix * 4;
+				}
+
 				p_stride = stride_luma;
 				count = tx->height;
 
@@ -1077,7 +1397,17 @@ Bool gf_gl_txw_upload(GF_GLTextureWrapper *tx, const u8 *data, GF_FilterFrameInt
 			if (tx->pbo_state!=GF_GL_PBO_PUSH) {
 				glBindTexture(GL_TEXTURE_2D, tx->textures[0] );
 				glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, tx->PBOs[0]);
-				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tx->width/2, tx->height, 0, GL_RGBA, tx->memory_format, NULL);
+
+				if ((tx->pix_fmt==GF_PIXEL_YUV444_PACK) || (tx->pix_fmt==GF_PIXEL_VYU444_PACK))
+					glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, tx->width, tx->height, 0, GL_RGB, tx->memory_format, NULL);
+				else if ((tx->pix_fmt==GF_PIXEL_YUVA444_PACK) || (tx->pix_fmt==GF_PIXEL_UYVA444_PACK))
+					glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tx->width, tx->height, 0, GL_RGBA, tx->memory_format, NULL);
+				else if (tx->pix_fmt==GF_PIXEL_YUV444_10_PACK)
+					glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tx->width, tx->height, 0, GL_RGBA, tx->memory_format, NULL);
+				else if (tx->pix_fmt==GF_PIXEL_V210)
+					glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tx->width, tx->height, 0, GL_RGBA, tx->memory_format, NULL);
+				else
+					glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tx->width/2, tx->height, 0, GL_RGBA, tx->memory_format, NULL);
 				glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
 			}
 		} else {
@@ -1155,28 +1485,67 @@ Bool gf_gl_txw_upload(GF_GLTextureWrapper *tx, const u8 *data, GF_FilterFrameInt
 		}
 	}
 #endif
-	else if ((tx->pix_fmt==GF_PIXEL_UYVY) || (tx->pix_fmt==GF_PIXEL_YUYV) || (tx->pix_fmt==GF_PIXEL_VYUY) || (tx->pix_fmt==GF_PIXEL_YVYU)) {
+	else if ((tx->nb_textures==1) || ((tx->nb_textures==2) && tx->has_alpha)) {
 		u32 uv_stride = 0;
 		glBindTexture(GL_TEXTURE_2D, tx->textures[0] );
 
 		use_stride = GF_FALSE;
-		if (stride_luma > 2*tx->width) {
-			//stride is given in bytes for packed formats, so divide by 2 to get the number of pixels
-			//for YUYV, and we upload as a texture with half the wsize so rdevide again by two
-			//since GL_UNPACK_ROW_LENGTH counts in component and we moved the set 2 bytes per comp on 10 bits
-			//no need to further divide
-			uv_stride = stride_luma/4;
-			use_stride = GF_TRUE;
-		}
-#if !defined(GPAC_GL_NO_STRIDE)
-		if (use_stride) glPixelStorei(GL_UNPACK_ROW_LENGTH, uv_stride);
-#endif
-		if (tx->first_tx_load) {
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tx->width/2, tx->height, 0, GL_RGBA, tx->memory_format, pY);
-			tx->first_tx_load = GF_FALSE;
-		} else {
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tx->width/2, tx->height, GL_RGBA, tx->memory_format, pY);
+		if ((tx->pix_fmt==GF_PIXEL_YUV444_PACK)
+			|| (tx->pix_fmt==GF_PIXEL_VYU444_PACK)
+			|| (tx->pix_fmt==GF_PIXEL_YUVA444_PACK)
+			|| (tx->pix_fmt==GF_PIXEL_UYVA444_PACK)
+			|| (tx->pix_fmt==GF_PIXEL_YUV444_10_PACK)
+			|| (tx->pix_fmt==GF_PIXEL_V210)
+		) {
+			u32 tx_width = tx->width;
+			u32 nb_bytes = 3;
+			GLuint fmt = GL_RGB;
+			switch (tx->pix_fmt) {
+			case GF_PIXEL_YUV444_PACK:
+			case GF_PIXEL_VYU444_PACK:
+				break;
+			default:
+				nb_bytes = 4;
+				fmt = GL_RGBA;
+			}
+			if (tx->pix_fmt==GF_PIXEL_V210) {
+				//inverse stride to get number of pixels - this is less than out actual width, we'll undo while repacking
+				tx_width = tx->stride / 4;
+				use_stride = GF_FALSE;
+			}
+			else if (stride_luma > nb_bytes*tx->width) {
+				use_stride = GF_TRUE;
+			}
 
+#if !defined(GPAC_GL_NO_STRIDE)
+			if (use_stride) glPixelStorei(GL_UNPACK_ROW_LENGTH, stride_luma/tx->bytes_per_pix);
+#endif
+			if (tx->first_tx_load) {
+				glTexImage2D(GL_TEXTURE_2D, 0, fmt, tx_width, tx->height, 0, fmt, tx->memory_format, pY);
+				tx->first_tx_load = GF_FALSE;
+			} else {
+				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tx_width, tx->height, fmt, tx->memory_format, pY);
+			}
+
+		} else {
+			u32 scaler = tx->scale_10bit ? 4 : 2;
+			if (stride_luma > scaler*tx->width) {
+				//stride is given in bytes for packed formats, so divide by 2 to get the number of pixels
+				//for YUYV, and we upload as a texture with half the wsize so redivide again by two
+				//since GL_UNPACK_ROW_LENGTH counts in component and we moved the set 2 bytes per comp on 10 bits
+				//no need to further divide
+				uv_stride = stride_luma/scaler/2;
+				use_stride = GF_TRUE;
+			}
+#if !defined(GPAC_GL_NO_STRIDE)
+			if (use_stride) glPixelStorei(GL_UNPACK_ROW_LENGTH, uv_stride);
+#endif
+			if (tx->first_tx_load) {
+				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tx->width/2, tx->height, 0, GL_RGBA, tx->memory_format, pY);
+				tx->first_tx_load = GF_FALSE;
+			} else {
+				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tx->width/2, tx->height, GL_RGBA, tx->memory_format, pY);
+			}
 		}
 
 #if !defined(GPAC_GL_NO_STRIDE)
@@ -1203,6 +1572,14 @@ Bool gf_gl_txw_upload(GF_GLTextureWrapper *tx, const u8 *data, GF_FilterFrameInt
 			if (use_stride) glPixelStorei(GL_UNPACK_ROW_LENGTH, stride_chroma/tx->bytes_per_pix);
 #endif
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, tx->uv_w, tx->uv_h, 0, tx->gl_format, tx->memory_format, pV);
+		}
+
+		if (pA) {
+			glBindTexture(GL_TEXTURE_2D, tx->textures[3] );
+#if !defined(GPAC_GL_NO_STRIDE)
+			if (use_stride) glPixelStorei(GL_UNPACK_ROW_LENGTH, stride_luma/tx->bytes_per_pix);
+#endif
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, tx->width, tx->height, 0, tx->gl_format, tx->memory_format, pA);
 		}
 
 #if !defined(GPAC_GL_NO_STRIDE)
@@ -1234,27 +1611,146 @@ Bool gf_gl_txw_upload(GF_GLTextureWrapper *tx, const u8 *data, GF_FilterFrameInt
 			glBindTexture(GL_TEXTURE_2D, 0);
 		}
 
+		if (pA) {
+			glBindTexture(GL_TEXTURE_2D, tx->textures[3] );
+#if !defined(GPAC_GL_NO_STRIDE)
+			if (use_stride) glPixelStorei(GL_UNPACK_ROW_LENGTH, stride_luma/tx->bytes_per_pix);
+#endif
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tx->width, tx->height, tx->gl_format, tx->memory_format, pA);
+			glBindTexture(GL_TEXTURE_2D, 0);
+		}
+
 #if !defined(GPAC_GL_NO_STRIDE)
 		if (use_stride) glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 #endif
 	}
+
+	//restore red/alpha scale
+	if (tx->scale_10bit) {
+#if !defined(GPAC_USE_GLES1X) && !defined(GPAC_USE_GLES2)
+		glPixelTransferi(GL_RED_SCALE, 1);
+		glPixelTransferi(GL_ALPHA_SCALE, 1);
+		glPixelStorei(GL_UNPACK_LSB_FIRST, 0);
+#endif
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	}
+
 	return GF_TRUE;
 }
+
+
+struct yuv_coefs {
+	u32 cicp;
+	Double Kr, Kb;
+} YUVMatrices[] = {
+	{GF_CICP_MX_BT709, 0.2126, 0.0722},
+	{GF_CICP_MX_FCC47, 0.3, 0.11},
+	{GF_CICP_MX_BT601_625, 0.299, 0.114},
+	{GF_CICP_MX_SMPTE170, 0.299, 0.114},
+	{GF_CICP_MX_SMPTE240, 0.212, 0.087},
+	{GF_CICP_MX_BT2020, 0.2627, 0.0593},
+	{GF_CICP_MX_BT2020_CL, 0.2627, 0.0593}
+};
+
+static void get_yuv_color_matrix(GF_GLTextureWrapper *tx, GF_Matrix *mx)
+{
+	Double Kg;
+	struct yuv_coefs *yc = NULL;
+
+	//setup YUV->RGB matrix, in row-major
+	gf_mx_init(*mx);
+
+	if (tx->mx_cicp>=0) {
+		u32 i, count=GF_ARRAY_LENGTH(YUVMatrices);
+		u32 mx_code = (u32) tx->mx_cicp;
+
+		if (mx_code==GF_CICP_MX_IDENTITY) {
+			return;
+		}
+
+		if (mx_code==GF_CICP_MX_YCgCo) {
+			GF_LOG(GF_LOG_WARNING, GF_LOG_MMIO, ("[GL] YCgCo matrix not supported, will use BT709\n"));
+			yc = &YUVMatrices[1];
+		}
+		else if (mx_code==GF_CICP_MX_YDzDx) {
+			GF_LOG(GF_LOG_WARNING, GF_LOG_MMIO, ("[GL] YDxDy matrix not supported, will use BT709\n"));
+			yc = &YUVMatrices[1];
+		} else {
+			for (i=0; i<count; i++) {
+				if (YUVMatrices[i].cicp == mx_code) {
+					yc = &YUVMatrices[i];
+					break;
+				}
+			}
+			if (!yc) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_MMIO, ("[GL] Unrecognized matrix coefficient value %d, will use BT709\n", mx_code));
+				yc = &YUVMatrices[1];
+			}
+		}
+	} else {
+		yc = &YUVMatrices[1];
+	}
+
+	Kg = 1.0 - yc->Kr - yc->Kb;
+
+	mx->m[0] = 1.0f;
+	mx->m[2] = (Float) (2.0 * (1.0 - yc->Kr) );
+
+	mx->m[4] = 1.0;
+	mx->m[5] = (Float) ( - 2.0 * (1.0 - yc->Kb) * yc->Kb / Kg );
+	mx->m[6] = (Float) ( - 2.0 * (1.0 - yc->Kr) * yc->Kr / Kg );
+
+	mx->m[8] = 1.0f;
+	mx->m[9] = (Float) (2.0 * (1.0 - yc->Kb) );
+	mx->m[10] = 0.0;
+
+	//move to column major
+	gf_mx_transpose(mx);
+
+	if (tx->fullrange) {
+		gf_mx_add_translation(mx, 0, FLT2FIX(-0.5), FLT2FIX(-0.5));
+	} else {
+		gf_mx_add_scale(mx, FLT2FIX(255.0/216.0), FLT2FIX(255.0/224.0), FLT2FIX(255.0/224.0) );
+		gf_mx_add_translation(mx, FLT2FIX(-0.0625), FLT2FIX(-0.5), FLT2FIX(-0.5));
+	}
+
+	GF_LOG(GF_LOG_INFO, GF_LOG_MMIO, ("[GL] YUV2RGB matrix is (column-major):\n"
+		"\t%.4f\t%.4f\t%.4f\t%.4f\n"
+		"\t%.4f\t%.4f\t%.4f\t%.4f\n"
+		"\t%.4f\t%.4f\t%.4f\t%.4f\n"
+		"\t%.4f\t%.4f\t%.4f\t%.4f\n",
+			mx->m[0], mx->m[1], mx->m[2], mx->m[3],
+			mx->m[4], mx->m[5], mx->m[6], mx->m[7],
+			mx->m[8], mx->m[9], mx->m[10], mx->m[11],
+			mx->m[12], mx->m[13], mx->m[14], mx->m[15]
+	));
+
+}
+
 
 Bool gf_gl_txw_bind(GF_GLTextureWrapper *tx, const char *tx_name, u32 gl_program, u32 texture_unit)
 {
 	if (!texture_unit)
 		texture_unit = GL_TEXTURE0;
 
+	if (gl_program && (gl_program != tx->last_program)) {
+		tx->last_program = gl_program;
+		tx->uniform_setup = GF_FALSE;
+	}
+
 #if !defined(GPAC_USE_TINYGL) && !defined(GPAC_USE_GLES1X)
-	if (!tx->uniform_setup && gl_program) {
+	if ((!tx->uniform_setup || (tx->init_active_texture != texture_unit)) && gl_program) {
 		char szName[100];
 		u32 i;
 		u32 start_idx = texture_unit - GL_TEXTURE0;
 		s32 loc;
+		tx->init_active_texture = texture_unit;
 		for (i=0; i<tx->nb_textures; i++) {
 			sprintf(szName, "_gf_%s_%d", tx_name, i+1);
 			loc = glGetUniformLocation(gl_program, szName);
+			if (!i && (loc == -1))
+				loc = glGetUniformLocation(gl_program, tx_name);
+
 			GL_CHECK_ERR()
 			if (loc == -1) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[GL] Failed to locate texture %s in shader\n", szName));
@@ -1264,11 +1760,33 @@ Bool gf_gl_txw_bind(GF_GLTextureWrapper *tx, const char *tx_name, u32 gl_program
 			GL_CHECK_ERR()
 		}
 		GL_CHECK_ERR()
+	}
+	if (!tx->uniform_setup && gl_program) {
+		s32 loc;
+		Bool needs_gpu_width = GF_FALSE;
+		char szName[100];
+		if (tx->is_yuv) {
+			GF_Matrix mx;
+			get_yuv_color_matrix(tx, &mx);
+			sprintf(szName, "_gf_%s_mx", tx_name);
+			loc = glGetUniformLocation(gl_program, szName);
+			if (loc == -1) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[GL] Failed to locate texture %s in shader\n", szName));
+				return GF_FALSE;
+			}
+			glUniformMatrix4fv(loc, 1, GL_FALSE, mx.m);
+		}
 		switch (tx->pix_fmt) {
+		case GF_PIXEL_V210:
+			needs_gpu_width = GF_TRUE;
 		case GF_PIXEL_UYVY:
 		case GF_PIXEL_YUYV:
 		case GF_PIXEL_VYUY:
 		case GF_PIXEL_YVYU:
+		case GF_PIXEL_UYVY_10:
+		case GF_PIXEL_YUYV_10:
+		case GF_PIXEL_VYUY_10:
+		case GF_PIXEL_YVYU_10:
 			sprintf(szName, "_gf_%s_width", tx_name);
 			loc = glGetUniformLocation(gl_program, szName);
 			if (loc == -1) {
@@ -1276,6 +1794,16 @@ Bool gf_gl_txw_bind(GF_GLTextureWrapper *tx, const char *tx_name, u32 gl_program
 				return GF_FALSE;
 			}
 			glUniform1f(loc, (GLfloat) tx->width);
+			if (needs_gpu_width) {
+				u32 gpu_width = tx->stride / 4;
+				sprintf(szName, "_gf_%s_gpu_width", tx_name);
+				loc = glGetUniformLocation(gl_program, szName);
+				if (loc == -1) {
+					GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[GL] Failed to locate uniform %s in shader\n", szName));
+					return GF_FALSE;
+				}
+				glUniform1f(loc, (GLfloat) gpu_width);
+			}
 			break;
 		default:
 			break;
@@ -1323,6 +1851,10 @@ Bool gf_gl_txw_bind(GF_GLTextureWrapper *tx, const char *tx_name, u32 gl_program
 #endif
 		}
 		return GF_TRUE;
+	}
+	if (tx->nb_textures>3) {
+		glActiveTexture(texture_unit + 3);
+		glBindTexture(GL_TEXTURE_2D, tx->textures[3]);
 	}
 	if (tx->nb_textures>2) {
 		glActiveTexture(texture_unit + 2);
@@ -1376,11 +1908,11 @@ void gf_opengl_init()
 {
 }
 
-Bool gf_gl_txw_insert_fragment_shader(u32 pix_fmt, const char *tx_name, char **f_source)
+Bool gf_gl_txw_insert_fragment_shader(u32 pix_fmt, const char *tx_name, char **f_source, Bool y_flip)
 {
 	return GF_FALSE;
 }
-Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height, u32 stride, u32 uv_stride, Bool linear_interp, GF_FilterFrameInterface *frame_ifce)
+Bool gf_gl_txw_setup(GF_GLTextureWrapper *tx, u32 pix_fmt, u32 width, u32 height, u32 stride, u32 uv_stride, Bool linear_interp, GF_FilterFrameInterface *frame_ifce, Bool full_range, s32 matrix_coef_or_neg)
 {
 	return GF_FALSE;
 }

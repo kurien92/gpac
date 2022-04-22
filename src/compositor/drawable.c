@@ -36,6 +36,23 @@ void drawable_draw(Drawable *drawable, GF_TraverseState *tr_state)
 	visual_2d_draw_path(tr_state->visual, tr_state->ctx->drawable->path, tr_state->ctx, NULL, NULL, tr_state);
 }
 
+void call_drawable_draw(DrawableContext *ctx, GF_TraverseState *tr_state, Bool set_cyclic)
+{
+	if (ctx->cliper) {
+		gf_node_traverse(ctx->cliper, tr_state);
+	}
+
+	if (ctx->drawable->flags & DRAWABLE_USE_TRAVERSE_DRAW) {
+		if (set_cyclic)
+			gf_node_allow_cyclic_traverse(ctx->drawable->node);
+		gf_node_traverse(ctx->drawable->node, tr_state);
+	} else {
+		drawable_draw(ctx->drawable, tr_state);
+	}
+	if (ctx->cliper)
+		gf_evg_surface_set_mask_mode(tr_state->visual->raster_surface, GF_EVGMASK_NONE);
+}
+
 /*default point_over routine*/
 #ifndef GPAC_DISABLE_VRML
 void vrml_drawable_pick(Drawable *drawable, GF_TraverseState *tr_state)
@@ -115,6 +132,16 @@ picked:
 }
 #endif /*GPAC_DISABLE_VRML*/
 
+void drawable_init_ex(Drawable *tmp)
+{
+	tmp->path = gf_path_new();
+	GF_SAFEALLOC(tmp->dri, DRInfo);
+	if (tmp->dri) {
+		/*allocate a default bounds container*/
+		GF_SAFEALLOC(tmp->dri->current_bounds, BoundInfo);
+	}
+}
+
 Drawable *drawable_new()
 {
 	Drawable *tmp;
@@ -164,7 +191,7 @@ void drawable_reset_bounds(Drawable *dr, GF_VisualManager *visual)
 	}
 }
 
-void drawable_del_ex(Drawable *dr, GF_Compositor *compositor)
+void drawable_del_ex(Drawable *dr, GF_Compositor *compositor, Bool no_free)
 {
 	StrikeInfo2D *si;
 	DRInfo *dri;
@@ -230,13 +257,14 @@ void drawable_del_ex(Drawable *dr, GF_Compositor *compositor)
 		delete_strikeinfo2d(si);
 		si = next;
 	}
-	gf_free(dr);
+	if (!no_free)
+		gf_free(dr);
 }
 
 void drawable_del(Drawable *dr)
 {
 	GF_Compositor *compositor = gf_sc_get_compositor(dr->node);
-	drawable_del_ex(dr, compositor);
+	drawable_del_ex(dr, compositor, GF_FALSE);
 }
 void drawable_node_del(GF_Node *node)
 {
@@ -682,11 +710,11 @@ void drawable_check_texture_dirty(DrawableContext *ctx, Drawable *drawable, GF_T
 			if (!ctx->aspect.fill_texture->transparent && (alpha==0xFF) && !ctx->aspect.fill_texture->compute_gradient_matrix && (drawable->flags & DRAWABLE_HYBGL_INIT)) {
 				ctx->flags |= CTX_HYBOGL_NO_CLEAR;
 			}
-			//otherwise, we need to redraw all object below, wether they changed ot not, because we have erased this part of the canvas
+			//otherwise, we need to redraw all object below, whether they changed ot not, because we have erased this part of the canvas
 			else {
 				ctx->flags |= CTX_TEXTURE_DIRTY;
 			}
-			//wait untill we have something to draw to decide that the texture is ready, otherwise we will not clear the canvas when texture is ready
+			//wait until we have something to draw to decide that the texture is ready, otherwise we will not clear the canvas when texture is ready
 			if (ctx->aspect.fill_texture->compute_gradient_matrix || ctx->aspect.fill_texture->data)
 				texture_ready=1;
 		}
@@ -704,11 +732,11 @@ void drawable_check_texture_dirty(DrawableContext *ctx, Drawable *drawable, GF_T
 			u8 alpha = GF_COL_A(ctx->aspect.line_color);
 			if (!ctx->aspect.line_texture->transparent && (alpha==0xFF) && !ctx->aspect.line_texture->compute_gradient_matrix && (drawable->flags & DRAWABLE_HYBGL_INIT))
 				ctx->flags |= CTX_HYBOGL_NO_CLEAR;
-			//otherwise, we need to redraw all object below, wether they changed ot not, bacause we have erased this part of the canvas
+			//otherwise, we need to redraw all object below, whether they changed ot not, bacause we have erased this part of the canvas
 			else
 				ctx->flags |= CTX_TEXTURE_DIRTY;
 
-			//wait untill we have something to draw to decide that the texture is ready, otherwise we will not clear the canvas when texture is ready
+			//wait until we have something to draw to decide that the texture is ready, otherwise we will not clear the canvas when texture is ready
 			if (ctx->aspect.line_texture->compute_gradient_matrix || ctx->aspect.line_texture->data)
 				texture_ready=1;
 		}
@@ -848,12 +876,7 @@ static Bool drawable_finalize_end(struct _drawable_context *ctx, GF_TraverseStat
 		tr_state->traversing_mode = TRAVERSE_DRAW_2D;
 		tr_state->ctx = ctx;
 
-		if (ctx->drawable->flags & DRAWABLE_USE_TRAVERSE_DRAW) {
-			gf_node_allow_cyclic_traverse(ctx->drawable->node);
-			gf_node_traverse(ctx->drawable->node, tr_state);
-		} else {
-			drawable_draw(ctx->drawable, tr_state);
-		}
+		call_drawable_draw(ctx, tr_state, GF_TRUE);
 
 		tr_state->ctx = NULL;
 		tr_state->traversing_mode = TRAVERSE_SORT;
@@ -890,16 +913,12 @@ void drawable_compute_line_scale(GF_TraverseState *tr_state, DrawAspect2D *asp)
 	asp->line_scale = MAX(gf_divfix(tr_state->visual->compositor->scale_x, rc.width), gf_divfix(tr_state->visual->compositor->scale_y, rc.height));
 }
 
-//#define REMOVE_UNUSED_CTX
 void drawable_finalize_sort_ex(DrawableContext *ctx, GF_TraverseState *tr_state, GF_Rect *orig_bounds, Bool skip_focus)
 {
-#ifdef REMVE_UNUSED_CTX
 	Bool can_remove = 0;
-#endif
 	Fixed pw;
 	GF_Rect unclip, store_orig_bounds;
 	GF_Node *appear = tr_state->override_appearance ? tr_state->override_appearance : tr_state->appear;
-
 
 	drawable_check_bounds(ctx, tr_state->visual);
 
@@ -957,19 +976,13 @@ void drawable_finalize_sort_ex(DrawableContext *ctx, GF_TraverseState *tr_state,
 		ctx->bi->clip.width = 0;
 	}
 
-#ifdef REMVE_UNUSED_CTX
 	can_remove = drawable_finalize_end(ctx, tr_state);
-#else
-	drawable_finalize_end(ctx, tr_state);
-#endif
 	if (ctx->drawable && !skip_focus)
 		drawable_check_focus_highlight(ctx->drawable->node, tr_state, &store_orig_bounds);
 
 	/*remove if this is the last context*/
-#ifdef REMVE_UNUSED_CTX
 	if (can_remove && (tr_state->visual->cur_context == ctx))
 		tr_state->visual->cur_context->drawable = NULL;
-#endif
 }
 
 void drawable_finalize_sort(struct _drawable_context *ctx, GF_TraverseState *tr_state, GF_Rect *orig_bounds)
@@ -1481,15 +1494,22 @@ static Bool svg_appearance_flag_dirty(u32 flags)
 #endif
 }
 
-DrawableContext *drawable_init_context_svg(Drawable *drawable, GF_TraverseState *tr_state)
+DrawableContext *drawable_init_context_svg(Drawable *drawable, GF_TraverseState *tr_state, SVG_ClipPath *clip_path)
 {
 	DrawableContext *ctx;
 	assert(tr_state->visual);
 
+	if (clip_path && !clip_path->target.target) {
+		clip_path->target.target = clip_path->target.string ? gf_sg_find_node_by_name(tr_state->visual->compositor->scene, clip_path->target.string+1) : NULL;
+		if (!clip_path->target.target) clip_path = NULL;
+	}
+
 #ifndef GPAC_DISABLE_VRML
 	/*setup SVG based on override appearance node */
 	if (tr_state->override_appearance) {
-		return drawable_init_context_mpeg4(drawable, tr_state);
+		ctx = drawable_init_context_mpeg4(drawable, tr_state);
+		if (ctx && clip_path) ctx->cliper = (GF_Node*)clip_path->target.target;
+		return ctx;
 	}
 #endif
 
@@ -1503,6 +1523,7 @@ DrawableContext *drawable_init_context_svg(Drawable *drawable, GF_TraverseState 
 	gf_mx2d_copy(ctx->transform, tr_state->transform);
 
 	ctx->drawable = drawable;
+	if (clip_path) ctx->cliper = (GF_Node*)clip_path->target.target;
 
 	if (tr_state->invalidate_all || svg_appearance_flag_dirty(tr_state->svg_flags)) {
 		ctx->flags |= CTX_APP_DIRTY;

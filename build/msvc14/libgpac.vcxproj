@@ -36,7 +36,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\include\gpac\ait.h" />
-    <ClInclude Include="..\..\include\gpac\atsc.h" />
+    <ClInclude Include="..\..\include\gpac\route.h" />
     <ClInclude Include="..\..\include\gpac\avparse.h" />
     <ClInclude Include="..\..\include\gpac\base_coding.h" />
     <ClInclude Include="..\..\include\gpac\bifs.h" />
@@ -157,6 +157,7 @@
     <ClInclude Include="..\..\src\quickjs\quickjs-atom.h" />
     <ClInclude Include="..\..\src\quickjs\quickjs-opcode.h" />
     <ClInclude Include="..\..\src\quickjs\quickjs.h" />
+    <ClInclude Include="..\..\src\quickjs\quickjs-libc.h" />
     <ClInclude Include="..\..\src\scenegraph\qjs_common.h" />
     <ClInclude Include="..\..\src\utils\module_wrap.h" />
   </ItemGroup>
@@ -247,6 +248,8 @@
     <ClCompile Include="..\..\src\compositor\visual_manager_3d.c" />
     <ClCompile Include="..\..\src\compositor\visual_manager_3d_gl.c" />
     <ClCompile Include="..\..\src\compositor\x3d_geometry.c" />
+    <ClCompile Include="..\..\src\filters\bs_agg.c" />
+    <ClCompile Include="..\..\src\filters\bs_split.c" />
     <ClCompile Include="..\..\src\filters\bsrw.c" />
     <ClCompile Include="..\..\src\filters\compose.c" />
     <ClCompile Include="..\..\src\filters\dasher.c" />
@@ -295,7 +298,7 @@
     <ClCompile Include="..\..\src\filters\hevcmerge.c" />
     <ClCompile Include="..\..\src\filters\hevcsplit.c" />
     <ClCompile Include="..\..\src\filters\inspect.c" />
-    <ClCompile Include="..\..\src\filters\in_atsc.c" />
+    <ClCompile Include="..\..\src\filters\in_route.c" />
     <ClCompile Include="..\..\src\filters\in_dvb4linux.c" />
     <ClCompile Include="..\..\src\filters\in_file.c" />
     <ClCompile Include="..\..\src\filters\in_http.c" />
@@ -306,6 +309,7 @@
     <ClCompile Include="..\..\src\filters\in_rtp_signaling.c" />
     <ClCompile Include="..\..\src\filters\in_rtp_stream.c" />
     <ClCompile Include="..\..\src\filters\in_sock.c" />
+    <ClCompile Include="..\..\src\filters\io_fcryp.c" />
     <ClCompile Include="..\..\src\filters\isoffin_load.c" />
     <ClCompile Include="..\..\src\filters\isoffin_read.c" />
     <ClCompile Include="..\..\src\filters\isoffin_read_ch.c" />
@@ -316,11 +320,13 @@
     <ClCompile Include="..\..\src\filters\mux_avi.c" />
     <ClCompile Include="..\..\src\filters\mux_gsf.c" />
     <ClCompile Include="..\..\src\filters\mux_isom.c" />
+    <ClCompile Include="..\..\src\filters\mux_ogg.c" />
     <ClCompile Include="..\..\src\filters\mux_ts.c" />
     <ClCompile Include="..\..\src\filters\out_audio.c" />
     <ClCompile Include="..\..\src\filters\out_file.c" />
     <ClCompile Include="..\..\src\filters\out_http.c" />
     <ClCompile Include="..\..\src\filters\out_pipe.c" />
+    <ClCompile Include="..\..\src\filters\out_route.c" />
     <ClCompile Include="..\..\src\filters\out_rtp.c" />
     <ClCompile Include="..\..\src\filters\out_rtsp.c" />
     <ClCompile Include="..\..\src\filters\out_sock.c" />
@@ -334,6 +340,7 @@
     <ClCompile Include="..\..\src\filters\reframe_h263.c" />
     <ClCompile Include="..\..\src\filters\reframe_img.c" />
     <ClCompile Include="..\..\src\filters\reframe_latm.c" />
+    <ClCompile Include="..\..\src\filters\reframe_mhas.c" />
     <ClCompile Include="..\..\src\filters\reframe_mp3.c" />
     <ClCompile Include="..\..\src\filters\reframe_mpgvid.c" />
     <ClCompile Include="..\..\src\filters\reframe_nalu.c" />
@@ -341,14 +348,19 @@
     <ClCompile Include="..\..\src\filters\reframe_qcp.c" />
     <ClCompile Include="..\..\src\filters\reframe_rawpcm.c" />
     <ClCompile Include="..\..\src\filters\reframe_rawvid.c" />
+    <ClCompile Include="..\..\src\filters\reframe_truehd.c" />
     <ClCompile Include="..\..\src\filters\resample_audio.c" />
+    <ClCompile Include="..\..\src\filters\restamp.c" />
     <ClCompile Include="..\..\src\filters\rewind.c" />
     <ClCompile Include="..\..\src\filters\rewrite_adts.c" />
+    <ClCompile Include="..\..\src\filters\rewrite_mhas.c" />
     <ClCompile Include="..\..\src\filters\rewrite_mp4v.c" />
     <ClCompile Include="..\..\src\filters\rewrite_nalu.c" />
     <ClCompile Include="..\..\src\filters\rewrite_obu.c" />
     <ClCompile Include="..\..\src\filters\tileagg.c" />
+    <ClCompile Include="..\..\src\filters\tilesplit.c" />
     <ClCompile Include="..\..\src\filters\tssplit.c" />
+    <ClCompile Include="..\..\src\filters\ttml_conv.c" />
     <ClCompile Include="..\..\src\filters\unit_test_filter.c" />
     <ClCompile Include="..\..\src\filters\vcrop.c" />
     <ClCompile Include="..\..\src\filters\vflip.c" />
@@ -356,6 +368,7 @@
     <ClCompile Include="..\..\src\filters\write_nhml.c" />
     <ClCompile Include="..\..\src\filters\write_nhnt.c" />
     <ClCompile Include="..\..\src\filters\write_qcp.c" />
+    <ClCompile Include="..\..\src\filters\write_tx3g.c" />
     <ClCompile Include="..\..\src\filters\write_vtt.c" />
     <ClCompile Include="..\..\src\filter_core\filter.c" />
     <ClCompile Include="..\..\src\filter_core\filter_pck.c" />
@@ -429,7 +442,7 @@
     <ClCompile Include="..\..\src\evg\stencil.c" />
     <ClCompile Include="..\..\src\evg\surface.c" />
     <ClCompile Include="..\..\src\media_tools\ait.c" />
-    <ClCompile Include="..\..\src\media_tools\atsc_dmx.c" />
+    <ClCompile Include="..\..\src\media_tools\route_dmx.c" />
     <ClCompile Include="..\..\src\media_tools\avilib.c" />
     <ClCompile Include="..\..\src\media_tools\av_parsers.c" />
     <ClCompile Include="..\..\src\media_tools\dash_client.c" />
@@ -496,6 +509,17 @@
       <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Debug - MP4Box_only|x64'">Level1</WarningLevel>
       <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Release - MP4Box_only|x64'">Level1</WarningLevel>
       <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Level1</WarningLevel>
+      <InlineFunctionExpansion Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Disabled</InlineFunctionExpansion>
+    </ClCompile>
+    <ClCompile Include="..\..\src\quickjs\quickjs-libc.c">
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Level3</WarningLevel>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Debug - MP4Box_only|Win32'">TurnOffAllWarnings</WarningLevel>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">TurnOffAllWarnings</WarningLevel>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Release - MP4Box_only|Win32'">TurnOffAllWarnings</WarningLevel>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">TurnOffAllWarnings</WarningLevel>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Debug - MP4Box_only|x64'">TurnOffAllWarnings</WarningLevel>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Release - MP4Box_only|x64'">TurnOffAllWarnings</WarningLevel>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">TurnOffAllWarnings</WarningLevel>
       <InlineFunctionExpansion Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Disabled</InlineFunctionExpansion>
     </ClCompile>
     <ClCompile Include="..\..\src\scenegraph\base_scenegraph.c" />

@@ -134,9 +134,13 @@ readonly attribute unsigned long long clock_hint_mediatime;
 readonly attribute unsigned long long connections_pending;
 /*! internal name - this can only be set and modified by JS API and allows for filter identification from JS*/
 attribute DOMString iname;
+/*! requires source ID for the filter - see \ref gf_filter_require_source_id*/
+writeonly unsigned boolean require_source_id;
+/*! gets JS path*/
+readonly attribute DOMString jspath;
 
 
-/*! sets filter desciption as visible when checking filter info
+/*! sets filter description as visible when checking filter info
 \param description description of filter*/
 void set_desc(DOMString description);
 /*! sets filter author as visible when checking filter info
@@ -164,11 +168,13 @@ void set_cap(optional JSCapDesc cap_desc = null);
 /*! sets the name of the filter, used for logs
 \param name the filter name
 */
-void set_name(DOMString name)
+void set_name(DOMString name);
+
 /*! creates a new PID - see \ref gf_filter_pid_new
 \return the new PID object
 */
 FilterPid new_pid();
+
 /*! sends an event on the filter - see \ref gf_filter_send_event
 \param evt the event to send
 \param upstream sends the evnet upstream
@@ -187,13 +193,7 @@ FilterProperty get_info(DOMString info_name, optional boolean is_string = false)
 \param mime the mime type to query
 \return true if supported
 */
-boolean is_supported_mime(DOMStrin mime);
-
-/*! disables data probing  if a MIME type is supported - see \ref gf_filter_is_supported_mime
-\param mime the mime type to query
-\return true if supported
-*/
-boolean is_supported_mime(DOMStrin mime);
+boolean is_supported_mime(DOMString mime);
 
 /*! update filter status string - see \ref gf_filter_update_status
 \param status the status string, may be null to reset the status string
@@ -241,6 +241,16 @@ void hint_clock(unsigned long long time_in_microseconds, double media_time_sec);
 */
 void send_update(DOMString filter_id, DOMString arg_name, DOMString arg_value, long propagate_mask);
 
+/*! locks filter session - see \ref gf_filter_lock_all
+\param do_lock if true locks filter
+*/
+void lock_all(boolean do_lock);
+
+/*! locks a filter - see \ref gf_filter_lock
+\param do_lock if true locks filter
+*/
+void lock(boolean do_lock);
+
 /*! adds a source filter in the media session - see \ref gf_filter_connect_source
 \param source URL of source to load
 \param parent URL of parent, used as baseURL for the source. May be NULL
@@ -274,6 +284,25 @@ void prevent_blocking(boolean do_prevent);
 \param do_block if true, filter input pids cannot be checked for end of stream during EOS queries
 */
 void block_eos(boolean do_block);
+
+/*! aborts the filter - see \ref gf_filter_abort*/
+void abort();
+
+
+/*! assigns source name to a filter - see \ref gf_filter_set_source
+\param from a Filter or a FilterInstance object to set a a source for this filter
+\param source_id the source ID to assign
+*/
+void set_source(Filter from, optional DOMString source_id=null);
+
+/*! assigns restricted source name to a filter - see \ref gf_filter_set_source_restricted
+\param from a Filter or a FilterInstance object to set a a source for this filter
+\param source_id the source ID to assign
+*/
+void set_source_restricted(Filter from, optional DOMString source_id=null);
+
+/*! reset source identifier for the filter - see \ref gf_filter_reset_source*/
+void reset_source();
 
 };
 
@@ -313,6 +342,12 @@ void send_update(DOMString filter_id, DOMString arg_name, DOMString arg_value, l
 */
 void set_source(Filter from, optional DOMString source_id=null);
 
+/*! assigns restricted source name to a filter - see \ref gf_filter_set_source_restricted
+\param from a Filter or a FilterInstance object to set a a source for this filter
+\param source_id the source ID to assign
+*/
+void set_source_restricted(Filter from, optional DOMString source_id=null);
+
 /*! removes a source filter - see \ref gf_filter_remove_src*/
 void remove();
 
@@ -336,6 +371,20 @@ void disable_inputs();
 
 /*! reset source identifier for the filter - see \ref gf_filter_reset_source*/
 void reset_source();
+
+/*! indicates if filter is likely blocking or not - see \ref gf_filter_set_blocking
+\param is_blocking if true, indicates the filter is likely to block upon process*/
+void set_blocking(boolean is_blocking);
+
+/*! filter name*/
+attribute readonly DOMString name;
+
+/*! filter type (registry name)*/
+attribute readonly DOMString type;
+
+/*! internal name - this can only be set and modified by JS API and allows for filter identification from JS*/
+attribute DOMString iname;
+
 };
 
 /*! The FilterPid object is a binding for \ref GF_FilterPid*/
@@ -347,8 +396,12 @@ attribute DOMString name;
 attribute boolean eos;
 /*! end of stream pending state - see \ref gf_filter_pid_has_seen_eos*/
 readonly attribute boolean eos_seen;
+/*! end of stream pending state - see \ref gf_filter_pid_eos_received*/
+readonly attribute boolean eos_received;
 /*! blocking state - see \ref gf_filter_pid_would_block*/
 readonly attribute boolean would_block;
+/*! sparse status - see \ref gf_filter_pid_is_sparse*/
+readonly attribute boolean sparse;
 /*! name of parent filter*/
 readonly attribute DOMString filter_name;
 /*! name of source filter*/
@@ -357,6 +410,8 @@ readonly attribute DOMString src_name;
 readonly attribute DOMString args;
 /*! argument of source filter*/
 readonly attribute DOMString src_args;
+/*! argument of source filter or first filter responsible for a fan-out*/
+readonly attribute DOMString unicity_args;
 /*! max buffer requirement of the pid - see \ref gf_filter_pid_get_max_buffer and \ref gf_filter_pid_set_max_buffer*/
 attribute long max_buffer;
 /*! enables loose connect of the pid - see \ref gf_filter_pid_set_loose_connect*/
@@ -391,6 +446,8 @@ writeonly unsigned boolean recompute_dts;
 readonly attribute unsigned long min_pck_dur;
 /*! playing state - see \ref gf_filter_pid_is_playing*/
 readonly attribute unsigned long playing;
+/*! next estimated timestamp, or null if not computable - see \ref gf_filter_pid_get_next_ts*/
+readonly attribute boolean next_ts;
 
 /*! sends an event on the pid - see \ref gf_filter_pid_send_event
 \param evt the event to send*/
@@ -432,12 +489,12 @@ FilterPaquet get_packet();
 */
 void drop_packet();
 
-/*! checks if a filter is in parent chain of pid - see \ref gf_filter_pid_get_buffer_occupancy
+/*! checks if a filter is in parent chain of pid - see \ref gf_filter_pid_is_filter_in_parents
 \param filter filter to check
 \return true if in parent chain*/
 boolean is_filter_in_parents(GF_Filter filter);
 
-/*! gets buffer occupancy - see \ref gf_filter_pid_is_filter_in_parents
+/*! gets buffer occupancy - see \ref gf_filter_pid_get_buffer_occupancy
 \param filter the Filter or FilterInstance object to check 
 \return a buffer occupancy object:
 \code
@@ -450,7 +507,7 @@ boolean is_filter_in_parents(GF_Filter filter);
 }
 \endcode
 */
-boolean is_filter_in_parents(GF_Filter filter);
+boolean get_buffer_occupancy(GF_Filter filter);
 
 /*! clears EOS on pid - see \ref gf_filter_pid_clear_eos*/
 void clear_eos();
@@ -516,8 +573,13 @@ unsigned long long value;
 Object get_clock_info();
 
 /*! sets property on a pid - see \ref gf_filter_pid_set_property and \ref gf_filter_pid_set_property_str
+
+\note if the name identifies the SenderNTP or ReceiverNTP properties:
+- if the value is 'true', the property is set to the current NTP timestamp
+- if the value is an object with properties 'n' and 'd', NTP timestamp is computed using 'n' as seconds and 'd' as fractional part
+
 \param name the ID or name of the builtin property
-\param prop the property to set
+\param prop the property to set. If not set, removes the property.
 \param is_user if set, indicates the queried property is a user-defined property rather than a built-in property
 */
 void set_prop(DOMString name, FilterProperty prop, optional boolean is_user=false);
@@ -545,6 +607,12 @@ void reset_props();
 \param from source pid
 */
 void copy_props(FilterPid from);
+
+
+/*! ignore this pid in blocking computations - see gf_filter_pid_ignore_blocking*
+\param do_ignore if true, pid is not used in blocking mode evaluation
+*/
+void ignore_blocking(optional boolean do_ignore=true);
 
 /*! creates a new output packet with no associated data
 \return new packet or null*/
@@ -648,8 +716,12 @@ readonly attribute unsigned long size;
 	\warning This arraybuffer will be detached whenever the packet data is modified for a destination packet
 */
 readonly attribute ArrayBuffer data;
+
 /*! set to true if data of the packet is available through a GF_FilterFrameInterface object*/
 readonly attribute boolean frame_ifce;
+
+/*! set to true if packet has properties other than default ones - see gf_filter_pck_has_properties*/
+readonly attribute boolean has_properties;
 
 /*! sets packet readonly - see gf_filter_pck_set_readonly*/
 void set_readonly();
@@ -729,6 +801,17 @@ void truncate(unsigned long size);
 */
 void copy_props(FilterPacket from);
 
+/*! creates a new packet cloning a source packet - see \ref gf_filter_pck_dangling_copy.
+
+The resulting packet is in read/write mode and may have its own memory allocated.
+This is typically used by sink filters wishing to access underling GPU data of a packet using frame interface.
+The resulting packet can be explicitly discarded using \ref discard, otherwise will be garrbage collected.
+
+\param cached_pck if set, will be reuse for creation of new packet. This can greatly reduce memory allocations
+\return the new FilterPacket or None if failure or None if failure ( if grabbing the frame into a local copy failed)
+*/
+void clone(optional FilterPacket cached_pck = null);
+
 };
 
 /*! FilterEvent expose a filter event object, either for processing a received event or triggering a new event.
@@ -801,15 +884,15 @@ attribute unsigned long set_tile_mode_plus_one;
 /*! quality switch - see \ref GF_FEVT_QualitySwitch*/
 attribute unsigned long quality_degradation;
 
-/*! visibility hint - see \ref GF_FEVT_VisibililityHint*/
+/*! visibility hint - see \ref GF_FEVT_VisibilityHint*/
 attribute unsigned long min_x;
-/*! visibility hint - see \ref GF_FEVT_VisibililityHint*/
+/*! visibility hint - see \ref GF_FEVT_VisibilityHint*/
 attribute unsigned long min_y;
-/*! visibility hint - see \ref GF_FEVT_VisibililityHint*/
+/*! visibility hint - see \ref GF_FEVT_VisibilityHint*/
 attribute unsigned long max_x;
-/*! visibility hint - see \ref GF_FEVT_VisibililityHint*/
+/*! visibility hint - see \ref GF_FEVT_VisibilityHint*/
 attribute unsigned long max_y;
-/*! visibility hint - see \ref GF_FEVT_VisibililityHint*/
+/*! visibility hint - see \ref GF_FEVT_VisibilityHint*/
 attribute boolean is_gaze;
 
 /*! buffer reqs - see \ref GF_FEVT_BufferRequirement*/
@@ -886,9 +969,11 @@ interface JSArgDesc {
     /*! type of the argument*/
     attribute unsigned long type;
     /*! default value of the argument*/
-    optional attribute DOMString default=null;
+    optional attribute DOMString def=null;
     /*! min/max or enum values of the argument*/
     optional attribute DOMString minmax_enum=null;
+    /*! argument hint type: "advanced", "expert", "hide" or null*/
+    optional attribute DOMString hint=null;
 };
 
 /*! interface used to describe filter capability*/
@@ -915,12 +1000,11 @@ interface JSCapDesc {
 
 GF_PROP_PID_CODECID: string containing the codec name\n
 GF_PROP_PID_STREAM_TYPE: string containing the stream type name\n
-GF_PROP_PID_AUDIO_FORMAT: string containing the audio format name\n
-GF_PROP_PID_PIXFMT: string containing the pixel format name\n
 \n
 Other properties are mapped by property type:\n
 GF_PROP_BOOL: boolean\n
 GF_PROP_UINT: integer\n
+GF_PROP_4CC: string\n
 GF_PROP_SINT: integer\n
 GF_PROP_LUINT: large integer\n
 GF_PROP_LSINT: large integer\n
@@ -930,14 +1014,14 @@ GF_PROP_STRING: string\n
 GF_PROP_STRING_NO_COPY: string\n
 GF_PROP_VEC2: object with number properties "x" and "y"\n
 GF_PROP_VEC2I: object with integer properties "x" and "y"\n
-GF_PROP_VEC3: object with number properties "x", "y" and "z"\n
 GF_PROP_VEC3I: object with integer properties "x", "y" and "z"\n
-GF_PROP_VEC4: object with number properties "x", "y", "z" and "w"\n
 GF_PROP_VEC4I: object with integer properties "x", "y", "z" and "w"\n
 GF_PROP_FRACTION: object with integer properties "n" and "d", representing fraction n/d\n
 GF_PROP_FRACTION64: object with large integer properties "n" and "d", representing fraction n/d\n
 GF_PROP_UINT_LIST: array of integers\n
+GF_PROP_4CC_LIST: array of strings\n
 GF_PROP_STRING_LIST: array of strings\n
+All enumeration properties (pixel format, audio format, etc): string\n
 */
 typedef Object FilterProperty;
 

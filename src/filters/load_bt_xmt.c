@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Context loader filter
@@ -34,7 +34,6 @@
 typedef struct
 {
 	//opts
-	Bool progressive;
 	u32 sax_dur;
 
 	//internal
@@ -157,8 +156,10 @@ GF_Err ctxload_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 
 	if (is_remove) {
 		priv->in_pid = NULL;
-		gf_filter_pid_remove(priv->out_pid);
-		priv->out_pid = NULL;
+		if (priv->out_pid) {
+			gf_filter_pid_remove(priv->out_pid);
+			priv->out_pid = NULL;
+		}
 		return GF_OK;
 	}
 
@@ -191,21 +192,6 @@ GF_Err ctxload_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 			return GF_NOT_SUPPORTED;
 		return GF_OK;
 	}
-
-#ifdef FILTER_FIXME
-	/*animation stream like*/
-	if (priv->ctx) {
-		GF_StreamContext *sc;
-		u32 i = 0;
-		while ((sc = (GF_StreamContext *)gf_list_enum(priv->ctx->streams, &i))) {
-			if (esd->ESID == sc->ESID) {
-				priv->nb_streams++;
-				return GF_OK;
-			}
-		}
-		return GF_NON_COMPLIANT_BITSTREAM;
-	}
-#endif
 
 	priv->file_name = prop->value.string;
 	priv->nb_streams = 1;
@@ -411,6 +397,7 @@ static GF_Err ctxload_process(GF_Filter *filter)
 		}
 		//init clocks
 		gf_odm_check_buffering(priv->scene->root_od, priv->in_pid);
+		gf_clock_set_time(priv->scene->root_od->ck, 0, 1000);
 		gf_filter_pck_get_framing(pck, &is_start, &is_end);
 		gf_filter_pid_drop_packet(priv->in_pid);
 	}
@@ -428,12 +415,6 @@ static GF_Err ctxload_process(GF_Filter *filter)
 		}
 		i=0;
 		while ((sc = (GF_StreamContext *)gf_list_enum(priv->ctx->streams, &i))) {
-#ifdef FILTER_FIXME
-			/*not our stream*/
-			if (!sc->in_root_od && (sc->ESID != ES_ID)) continue;
-			/*not the base stream*/
-			if (sc->in_root_od && (priv->base_stream_id != ES_ID)) continue;
-#endif
 			/*handle SWF media extraction*/
 			if ((sc->streamType == GF_STREAM_OD) && (priv->load_flags==1)) continue;
 			sc->last_au_time = 0;
@@ -443,7 +424,7 @@ static GF_Err ctxload_process(GF_Filter *filter)
 
 	if (priv->load_flags != 2) {
 
-		if (priv->progressive) {
+		if (priv->sax_dur) {
 			u32 entry_time;
 			char file_buf[4096+1];
 			if (!priv->src) {
@@ -517,7 +498,7 @@ static GF_Err ctxload_process(GF_Filter *filter)
 			gf_sm_del(priv->ctx);
 			priv->ctx = NULL;
 			priv->load_flags = 3;
-			GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[CtxLoad] Failed to load context for file %s: %s\n", priv->file_name, gf_error_to_string(e) ));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CtxLoad] Failed to load context for file %s: %s\n", priv->file_name, gf_error_to_string(e) ));
 			if (priv->out_pid)
 				gf_filter_pid_set_eos(priv->out_pid);
 			return e;
@@ -536,18 +517,13 @@ static GF_Err ctxload_process(GF_Filter *filter)
 
 	i=0;
 	while ((sc = (GF_StreamContext *)gf_list_enum(priv->ctx->streams, &i))) {
+		Bool flush_all = GF_FALSE;
 		u32 stream_time = gf_clock_time(priv->scene->root_od->ck);
 
 		//compositor is in end of stream mode, flush all commands
 		if (priv->scene->compositor->check_eos_state==2)
-			stream_time=0xFFFFFFFF;
+			flush_all = GF_TRUE;
 
-#ifdef FILTER_FIXME
-		/*not our stream*/
-		if (!sc->in_root_od && (sc->ESID != ES_ID)) continue;
-		/*not the base stream*/
-		if (sc->in_root_od && (priv->base_stream_id != ES_ID)) continue;
-#endif
 		/*handle SWF media extraction*/
 		if ((sc->streamType == GF_STREAM_OD) && (priv->load_flags==1)) continue;
 
@@ -565,9 +541,9 @@ static GF_Err ctxload_process(GF_Filter *filter)
 		/*seek*/
 		if (!sc->last_au_time) {
 			while ((au = (GF_AUContext *)gf_list_enum(sc->AUs, &j))) {
-				u32 au_time = (u32) (au->timing*1000/sc->timeScale);
+				u32 au_time = (u32) gf_timestamp_to_clocktime(au->timing, sc->timeScale);
 
-				if (au_time > stream_time)
+				if (!flush_all && (gf_clock_diff(priv->scene->root_od->ck, stream_time, au_time)>0) )
 					break;
 				if (au->flags & GF_SM_AU_RAP) last_rap = j-1;
 			}
@@ -575,7 +551,7 @@ static GF_Err ctxload_process(GF_Filter *filter)
 		}
 
 		while ((au = (GF_AUContext *)gf_list_enum(sc->AUs, &j))) {
-			u32 au_time = (u32) (au->timing*1000/sc->timeScale);
+			u32 au_time = (u32) gf_timestamp_to_clocktime(au->timing, sc->timeScale);
 
 			if (au_time + 1 <= sc->last_au_time) {
 				/*remove first replace command*/
@@ -593,20 +569,18 @@ static GF_Err ctxload_process(GF_Filter *filter)
 				continue;
 			}
 
-			if (au_time > stream_time) {
-				Double ts_offset;
-				u32 t = au_time - stream_time;
-				if (!min_next_time_ms || (min_next_time_ms>t))
-					min_next_time_ms = t;
+			s32 early = flush_all ? 0 : gf_clock_diff(priv->scene->root_od->ck, stream_time, au_time);
+			if (early>0) {
+				if (!min_next_time_ms || (min_next_time_ms > early))
+					min_next_time_ms = early;
 
 				updates_pending++;
 
-				ts_offset = (Double) au->timing;
-				ts_offset /= sc->timeScale;
-				gf_sc_sys_frame_pending(priv->scene->compositor, ts_offset, stream_time, filter);
+				u64 cts = gf_timestamp_rescale(au->timing, sc->timeScale, 1000);
+				gf_sc_sys_frame_pending(priv->scene->compositor, cts, stream_time, filter);
 				break;
 			}
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[CtxLoad] %s applying AU time %d\n", priv->file_name, au_time ));
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_PARSER, ("[CtxLoad] %s applying AU time %d\n", priv->file_name, au_time ));
 
 			if (sc->streamType == GF_STREAM_SCENE) {
 				GF_Command *com;
@@ -731,8 +705,12 @@ static GF_Err ctxload_process(GF_Filter *filter)
 							/*if files were created we'll have to clean up (swf import)*/
 							if (mux->delete_file) gf_list_add(priv->files_to_delete, gf_strdup(remote));
 
+							GF_List *oci_descr = od->OCIDescriptors;
+							od->OCIDescriptors = NULL;
 							gf_odf_desc_del((GF_Descriptor *) od);
 							od = (GF_ObjectDescriptor *) gf_odf_desc_new(GF_ODF_OD_TAG);
+							gf_list_del(od->OCIDescriptors);
+							od->OCIDescriptors = oci_descr;
 							od->URLString = remote;
 							od->fake_remote = GF_TRUE;
 							od->objectDescriptorID = k;
@@ -808,7 +786,8 @@ static const char *ctxload_probe_data(const u8 *probe_data, u32 size, GF_FilterP
 {
 	const char *mime_type = NULL;
 	char *dst = NULL;
-	u8 *res;
+	GF_Err e;
+	char *res=NULL;
 
 	/* check gzip magic header */
 	if ((size>2) && (probe_data[0] == 0x1f) && (probe_data[1] == 0x8b)) {
@@ -816,42 +795,121 @@ static const char *ctxload_probe_data(const u8 *probe_data, u32 size, GF_FilterP
 		return "btz|bt.gz|xmt.gz|xmtz|wrl.gz|x3dv.gz|x3dvz|x3d.gz|x3dz";
 	}
 
-	res = gf_utf_get_utf8_string_from_bom((char *)probe_data, size, &dst);
-	if (res) probe_data = res;
+	e = gf_utf_get_utf8_string_from_bom(probe_data, size, &dst, &res);
+	if (e) return NULL;
 
-	if (strstr(probe_data, "<XMT-A") || strstr(probe_data, ":mpeg4:xmta:")) {
+	//strip all spaces and \r\n
+	while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
+		probe_data ++;
+
+	//for XML, strip doctype, <?xml and comments
+	while (1) {
+		if (!strncmp(probe_data, "<!DOCTYPE", 9)) {
+			probe_data = strchr(probe_data, '>');
+			if (!probe_data) goto exit;
+			probe_data++;
+			while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
+				probe_data ++;
+		}
+		//for XML, strip xml header
+		else if (!strncmp(probe_data, "<?xml", 5)) {
+			probe_data = strstr(probe_data, "?>");
+			if (!probe_data) goto exit;
+
+			probe_data += 2;
+			while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
+				probe_data ++;
+		}
+		else if (!strncmp(probe_data, "<!--", 4)) {
+			probe_data = strstr(probe_data, "-->");
+			if (!probe_data) goto exit;
+			probe_data += 3;
+			while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
+				probe_data ++;
+		} else {
+			break;
+		}
+	}
+	//probe_data is now the first element of the document, if XML
+	//we should refine by getting the xmlns attribute value rather than searching for its value...
+
+	if (strstr(probe_data, "http://www.w3.org/1999/XSL/Transform")
+	) {
+	} else if (!strncmp(probe_data, "<XMT-A", strlen("<XMT-A"))
+		|| strstr(probe_data, "urn:mpeg:mpeg4:xmta:schema:2002")
+	) {
 		mime_type = "application/x-xmt";
-	} else if (strstr(probe_data, "InitialObjectDescriptor")
-		|| (strstr(probe_data, "EXTERNPROTO") && strstr(probe_data, "gpac:"))
+	} else if (strstr(probe_data, "<X3D")
+		|| strstr(probe_data, "http://www.web3d.org/specifications/x3d-3.0.xsd")
 	) {
-		mime_type = "application/x-bt";
-	} else if ( strstr(probe_data, "children") &&
-				(strstr(probe_data, "Group") || strstr(probe_data, "OrderedGroup") || strstr(probe_data, "Layer2D") || strstr(probe_data, "Layer3D"))
-	) {
-		mime_type = "application/x-bt";
-	} else if (strstr(probe_data, "#VRML V2.0 utf8")) {
-		mime_type = "model/vrml";
-	} else if ( strstr(probe_data, "#X3D V3.0")) {
-		mime_type = "model/x3d+vrml";
-	} else if (strstr(probe_data, "<X3D") || strstr(probe_data, "/x3d-3.0.dtd")) {
 		mime_type = "model/x3d+xml";
-	} else if (strstr(probe_data, "<saf") || strstr(probe_data, "mpeg4:SAF:2005")
-		|| strstr(probe_data, "mpeg4:LASeR:2005")
+	} else if (strstr(probe_data, "<saf")
+		|| strstr(probe_data, "urn:mpeg:mpeg4:SAF:2005")
+		|| strstr(probe_data, "urn:mpeg:mpeg4:LASeR:2005")
 	) {
 		mime_type = "application/x-LASeR+xml";
-	} else if (strstr(probe_data, "DIMSStream") ) {
+	} else if (!strncmp(probe_data, "<DIMSStream", strlen("<DIMSStream") ) ) {
 		mime_type = "application/dims";
-	} else if (strstr(probe_data, "<svg") || strstr(probe_data, "w3.org/2000/svg") ) {
+	} else if (!strncmp(probe_data, "<svg", 4) || strstr(probe_data, "http://www.w3.org/2000/svg") ) {
 		mime_type = "image/svg+xml";
-	} else if (strstr(probe_data, "<widget")  ) {
+	} else if (!strncmp(probe_data, "<widget", strlen("<widget") ) ) {
 		mime_type = "application/widget";
-	} else if (strstr(probe_data, "<NHNTStream")) {
+	} else if (!strncmp(probe_data, "<NHNTStream", strlen("<NHNTStream") ) ) {
 		mime_type = "application/x-nhml";
-	} else if (strstr(probe_data, "TextStream") ) {
+	} else if (!strncmp(probe_data, "<TextStream", strlen("<TextStream") ) ) {
 		mime_type = "text/ttxt";
-	} else if (strstr(probe_data, "text3GTrack") ) {
+	} else if (!strncmp(probe_data, "<text3GTrack", strlen("<text3GTrack") ) ) {
 		mime_type = "quicktime/text";
 	}
+	//BT/VRML with no doc header
+	else {
+		//get first keyword
+		while (1) {
+			//strip all spaces and \r\n
+			while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
+				probe_data ++;
+
+			//VRML / XRDV files
+			if (!strncmp(probe_data, "#VRML V2.0", strlen("#VRML V2.0"))) {
+				mime_type = "model/vrml";
+				goto exit;
+			}
+			if (!strncmp(probe_data, "#X3D V3.0", strlen("#X3D V3.0"))) {
+				mime_type = "model/x3d+vrml";
+				goto exit;
+			}
+
+			//skip comment lines and some specific X3D keyword (we want to fetch a group
+			if ((probe_data[0] != '#')
+				&& strncmp(probe_data, "PROFILE", strlen("PROFILE"))
+				&& strncmp(probe_data, "COMPONENT", strlen("COMPONENT"))
+				&& strncmp(probe_data, "META", strlen("META"))
+				&& strncmp(probe_data, "IMPORT", strlen("IMPORT"))
+				&& strncmp(probe_data, "EXPORT", strlen("EXPORT"))
+			) {
+				break;
+			}
+			//skip line and go one
+			probe_data = strchr(probe_data, '\n');
+			if (!probe_data) goto exit;
+		}
+		
+		if (!strncmp(probe_data, "InitialObjectDescriptor", strlen("InitialObjectDescriptor"))
+			|| !strncmp(probe_data, "EXTERNPROTO", strlen("EXTERNPROTO"))
+			|| !strncmp(probe_data, "PROTO", strlen("PROTO"))
+			|| !strncmp(probe_data, "Group", strlen("Group"))
+			|| !strncmp(probe_data, "OrderedGroup", strlen("OrderedGroup"))
+			|| !strncmp(probe_data, "Layer2D", strlen("Layer2D"))
+			|| !strncmp(probe_data, "Layer3D", strlen("Layer3D"))
+		) {
+			if (strstr(probe_data, "children"))
+				mime_type = "application/x-bt";
+		}
+	}
+
+
+exit:
+
 	if (dst) gf_free(dst);
 	if (mime_type) {
 		*score = GF_FPROBE_MAYBE_SUPPORTED;
@@ -861,8 +919,6 @@ static const char *ctxload_probe_data(const u8 *probe_data, u32 size, GF_FilterP
 	*score = GF_FPROBE_NOT_SUPPORTED;
 	return NULL;
 }
-
-#endif //defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_SCENEGRAPH)
 
 static const GF_FilterCapability CTXLoadCaps[] =
 {
@@ -878,15 +934,16 @@ static const GF_FilterCapability CTXLoadCaps[] =
 
 static const GF_FilterArgs CTXLoadArgs[] =
 {
-	{ OFFS(progressive), "enable progressive loading", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(sax_dur), "loading duration for SAX parsing (XMT), 0 disables SAX parsing", GF_PROP_UINT, "1000", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(sax_dur), "duration for SAX parsing (XMT), 0 disables SAX parsing", GF_PROP_UINT, "0", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{0}
 };
 
 GF_FilterRegister CTXLoadRegister = {
 	.name = "btplay",
 	GF_FS_SET_DESCRIPTION("BT/XMT/X3D loader")
-	GF_FS_SET_HELP("This filter parses MPEG-4 BIFS (BT and XMT), VRML97 and X3D (wrl and XML) files directly into the scene graph of the compositor. It cannot be used to dump content.")
+	GF_FS_SET_HELP("This filter parses MPEG-4 BIFS (BT and XMT), VRML97 and X3D (wrl and XML) files directly into the scene graph of the compositor.\n"
+	"\n"
+	"When [-sax_dur=N]() is set, the filter will do a progressive load of the source and cancel current loading when processing time is higher than `N`.\n")
 	.private_size = sizeof(CTXLoadPriv),
 	.flags = GF_FS_REG_MAIN_THREAD,
 	.args = CTXLoadArgs,
@@ -897,6 +954,8 @@ GF_FilterRegister CTXLoadRegister = {
 	.process_event = ctxload_process_event,
 	.probe_data = ctxload_probe_data,
 };
+
+#endif //defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_SCENEGRAPH)
 
 
 const GF_FilterRegister *ctxload_register(GF_FilterSession *session)

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2021
  *					All rights reserved
  *
  *  This file is part of GPAC / mediacodec decoder filter
@@ -124,7 +124,7 @@ void mcdec_init_media_format(GF_MCDecCtx *ctx, AMediaFormat *format)
 static void mcdec_reset_ps_list(GF_List *list)
 {
 	while (list && gf_list_count(list)) {
-		GF_AVCConfigSlot *slc = gf_list_get(list, 0);
+		GF_NALUFFParam *slc = gf_list_get(list, 0);
 		gf_free(slc->data);
 		gf_free(slc);
 		gf_list_rem(list, 0);
@@ -136,8 +136,8 @@ GF_Err mcdec_init_avc_dec(GF_MCDecCtx *ctx)
 {
 	s32 idx;
 	u32 i;
-	GF_AVCConfigSlot *sps = NULL;
-	GF_AVCConfigSlot *pps = NULL;
+	GF_NALUFFParam *sps = NULL;
+	GF_NALUFFParam *pps = NULL;
 
 	for (i=0; i<gf_list_count(ctx->SPSs); i++) {
 		sps = gf_list_get(ctx->SPSs, i);
@@ -157,7 +157,9 @@ GF_Err mcdec_init_avc_dec(GF_MCDecCtx *ctx)
 	ctx->reconfig_needed = GF_FALSE;
 	ctx->inject_xps = GF_TRUE;
 
+	if (ctx->active_sps<0) return GF_OK;
 	idx = ctx->active_sps;
+
 	ctx->width = ctx->avc.sps[idx].width;
 	ctx->height = ctx->avc.sps[idx].height;
 	ctx->crop_left = ctx->avc.sps[idx].crop.left;
@@ -244,9 +246,9 @@ GF_Err mcdec_init_hevc_dec(GF_MCDecCtx *ctx)
 	s32 idx;
 
 	u32 i;
-	GF_AVCConfigSlot *sps = NULL;
-	GF_AVCConfigSlot *pps = NULL;
-	GF_AVCConfigSlot *vps = NULL;
+	GF_NALUFFParam *sps = NULL;
+	GF_NALUFFParam *pps = NULL;
+	GF_NALUFFParam *vps = NULL;
 
 	for (i=0; i<gf_list_count(ctx->SPSs); i++) {
 		sps = gf_list_get(ctx->SPSs, i);
@@ -273,6 +275,8 @@ GF_Err mcdec_init_hevc_dec(GF_MCDecCtx *ctx)
 	if (!vps) return GF_NON_COMPLIANT_BITSTREAM;
 	ctx->reconfig_needed = GF_FALSE;
 	ctx->inject_xps = GF_TRUE;
+
+	if (ctx->active_sps<0) return GF_OK;
 
 	idx = ctx->active_sps;
 	ctx->width = ctx->hevc.sps[idx].width;
@@ -433,16 +437,16 @@ static void mcdec_register_avc_param_set(GF_MCDecCtx *ctx, u8 *data, u32 size, u
 	GF_List *dest = (xps == MCDEC_SPS) ? ctx->SPSs : ctx->PPSs;
 
 	if (xps == MCDEC_SPS) {
-		ps_id = gf_media_avc_read_sps(data, size, &ctx->avc, 0, NULL);
+		ps_id = gf_avc_read_sps(data, size, &ctx->avc, 0, NULL);
 		if (ps_id<0) return;
 	}
 	else {
-		ps_id = gf_media_avc_read_pps(data, size, &ctx->avc);
+		ps_id = gf_avc_read_pps(data, size, &ctx->avc);
 		if (ps_id<0) return;
 	}
 	count = gf_list_count(dest);
 	for (i = 0; i<count; i++) {
-		GF_AVCConfigSlot *a_slc = gf_list_get(dest, i);
+		GF_NALUFFParam *a_slc = gf_list_get(dest, i);
 		if (a_slc->id != ps_id) continue;
 		//not same size or different content but same ID, remove old xPS
 		if ((a_slc->size != size) || memcmp(a_slc->data, data, size)) {
@@ -457,8 +461,8 @@ static void mcdec_register_avc_param_set(GF_MCDecCtx *ctx, u8 *data, u32 size, u
 		break;
 	}
 	if (add) {
-		GF_AVCConfigSlot *slc;
-		GF_SAFEALLOC(slc, GF_AVCConfigSlot);
+		GF_NALUFFParam *slc;
+		GF_SAFEALLOC(slc, GF_NALUFFParam);
 		if (!slc) return;
 		slc->data = gf_malloc(size);
 		if (!slc->data) {
@@ -486,17 +490,17 @@ static void mcdec_register_hevc_param_set(GF_MCDecCtx *ctx, u8 *data, u32 size, 
 	switch(xps) {
 		case MCDEC_SPS:
 			dest = ctx->SPSs;
-			ps_id = gf_media_hevc_read_sps(data, size, &ctx->hevc);
+			ps_id = gf_hevc_read_sps(data, size, &ctx->hevc);
 			if (ps_id<0) return;
 			break;
 		case MCDEC_PPS:
 			dest = ctx->PPSs;
-			ps_id = gf_media_hevc_read_pps(data, size, &ctx->hevc);
+			ps_id = gf_hevc_read_pps(data, size, &ctx->hevc);
 			if (ps_id<0) return;
 			break;
 		case MCDEC_VPS:
 			dest = ctx->VPSs;
-			ps_id = gf_media_hevc_read_vps(data, size, &ctx->hevc);
+			ps_id = gf_hevc_read_vps(data, size, &ctx->hevc);
 			if (ps_id<0) return;
 			break;
 		default:
@@ -505,7 +509,7 @@ static void mcdec_register_hevc_param_set(GF_MCDecCtx *ctx, u8 *data, u32 size, 
 
 	count = gf_list_count(dest);
 	for (i = 0; i<count; i++) {
-		GF_AVCConfigSlot *a_slc = gf_list_get(dest, i);
+		GF_NALUFFParam *a_slc = gf_list_get(dest, i);
 		if (a_slc->id != ps_id) continue;
 		//not same size or different content but same ID, remove old xPS
 		if ((a_slc->size != size) || memcmp(a_slc->data, data, size)) {
@@ -520,8 +524,8 @@ static void mcdec_register_hevc_param_set(GF_MCDecCtx *ctx, u8 *data, u32 size, 
 		break;
 	}
 	if (add && dest) {
-		GF_AVCConfigSlot *slc;
-		GF_SAFEALLOC(slc, GF_AVCConfigSlot);
+		GF_NALUFFParam *slc;
+		GF_SAFEALLOC(slc, GF_NALUFFParam);
 		if (!slc) return;
 		slc->data = gf_malloc(size);
 		if (!slc->data) {
@@ -554,8 +558,10 @@ static GF_Err mcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 		gf_list_del_item(ctx->streams, pid);
 		if (!gf_list_count(ctx->streams)) {
 			if (ctx->codec) AMediaCodec_stop(ctx->codec);
-			if (ctx->opid) gf_filter_pid_remove(ctx->opid);
-			ctx->opid = NULL;
+			if (ctx->opid) {
+				gf_filter_pid_remove(ctx->opid);
+				ctx->opid = NULL;
+			}
 		}
 		return GF_OK;
 	}
@@ -650,7 +656,7 @@ static GF_Err mcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	//check AVC config
     if (ctx->codecid == GF_CODECID_AVC) {
 		GF_AVCConfig *cfg;
-		GF_AVCConfigSlot *slc;
+		GF_NALUFFParam *slc;
 
 		ctx->mime = "video/avc";
 		ctx->avc.sps_active_idx = -1;
@@ -689,7 +695,7 @@ static GF_Err mcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	else if (codecid == GF_CODECID_HEVC) {
 		ctx->mime = "video/hevc";
         GF_HEVCConfig *hvcc;
-	    GF_AVCConfigSlot *sl;
+	    GF_NALUFFParam *sl;
 	    HEVCState hevc;
 	    u32 j;
 
@@ -700,9 +706,9 @@ static GF_Err mcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	    ctx->nalu_size_length = hvcc->nal_unit_size;
 
 	    for (i=0; i< gf_list_count(hvcc->param_array); i++) {
-			GF_HEVCParamArray *ar = (GF_HEVCParamArray *)gf_list_get(hvcc->param_array, i);
+			GF_NALUFFParamArray *ar = (GF_NALUFFParamArray *)gf_list_get(hvcc->param_array, i);
 			for (j=0; j< gf_list_count(ar->nalus); j++) {
-				sl = (GF_AVCConfigSlot *)gf_list_get(ar->nalus, j);
+				sl = (GF_NALUFFParam *)gf_list_get(ar->nalus, j);
 
 				if (ar->type==GF_HEVC_NALU_SEQ_PARAM) {
 					mcdec_register_hevc_param_set(ctx, sl->data, sl->size, MCDEC_SPS);
@@ -735,7 +741,7 @@ static void mcdec_write_ps(GF_BitStream *bs, GF_List *ps, s32 active_ps, Bool al
 	if (!all && (active_ps<0)) return;
 	count = gf_list_count(ps);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(ps, i);
+		GF_NALUFFParam *sl = gf_list_get(ps, i);
 		if (all || (sl->id==active_ps)) {
 			gf_bs_write_u32(bs, 1);
 			gf_bs_write_data(bs, sl->data, sl->size);
@@ -805,7 +811,7 @@ static GF_Err mcdec_check_ps_state(GF_MCDecCtx *ctx, u8 *inBuffer, u32 inBufferL
 
 		if (ctx->codecid==GF_CODECID_AVC) {
 			//this will turn it back on
-			gf_media_avc_parse_nalu (bs, &ctx->avc);
+			gf_avc_parse_nalu (bs, &ctx->avc);
 			gf_bs_seek(bs, pos + nal_size);
 
 			nal_type = ctx->avc.last_nal_type_parsed;
@@ -828,7 +834,7 @@ static GF_Err mcdec_check_ps_state(GF_MCDecCtx *ctx, u8 *inBuffer, u32 inBufferL
 			}
 		} else {
 			u8 quality_id, temporal_id;
-			gf_media_hevc_parse_nalu_bs (bs, &ctx->hevc, &nal_type, &temporal_id, &quality_id);
+			gf_hevc_parse_nalu_bs (bs, &ctx->hevc, &nal_type, &temporal_id, &quality_id);
 			gf_bs_seek(bs, pos + nal_size);
 
 			switch(nal_type) {
@@ -871,7 +877,8 @@ static GF_Err mcdec_process(GF_Filter *filter)
 
 	Bool mcdec_buffer_available = GF_FALSE;
 
-#if FILTER_FIXME
+	//commented out, leading to some crashes
+#if 0
 	if (!ctx->before_exit_registered) {
 		ctx->before_exit_registered = GF_TRUE;
 		if (gf_register_before_exit_function(gf_th_current(), &mcdec_exit_callback) != GF_OK) {
@@ -898,9 +905,8 @@ static GF_Err mcdec_process(GF_Filter *filter)
 				return GF_OK;
 			}
 		}
-		dts = gf_filter_pck_get_dts(pck);
-		dts *= 1000;
-		dts /= gf_filter_pck_get_timescale(pck);
+		dts = gf_timestamp_rescale(gf_filter_pck_get_dts(pck), gf_filter_pck_get_timescale(pck), 1000);
+
 		if (!min_dts || (min_dts>dts)) {
 			min_dts = dts;
 			ref_pid = pid;
@@ -1213,6 +1219,10 @@ void mcdec_finalize(GF_Filter *filter)
 }
 
 #else
+static GF_Err mcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
+{
+	return GF_EOS;
+}
 static GF_Err mcdec_process(GF_Filter *filter)
 {
 	return GF_EOS;
@@ -1256,8 +1266,8 @@ GF_FilterRegister GF_MCDecCtxRegister = {
 	.private_size = sizeof(GF_MCDecCtx),
 	.initialize = mcdec_initialize,
 	.finalize = mcdec_finalize,
-	.configure_pid = mcdec_configure_pid,
 #endif
+	.configure_pid = mcdec_configure_pid,
 	.process = mcdec_process,
 };
 
@@ -1270,9 +1280,16 @@ const GF_FilterRegister *mcdec_register(GF_FilterSession *session)
 	GF_MCDecCtxRegister.version = "! Warning: MediaCodec SDK NOT AVAILABLE IN THIS BUILD !";
 
 #ifdef GPAC_ENABLE_COVERAGE
+	mcdec_configure_pid(NULL, NULL, GF_FALSE);
 	mcdec_process(NULL);
 #endif
-
-#endif
 	return &GF_MCDecCtxRegister;
+
+#elif defined(GPAC_HAS_MEDIACODEC)
+
+	return &GF_MCDecCtxRegister;
+#else
+
+	return NULL;
+#endif
 }

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -35,7 +35,7 @@
 
 #define CHECK_FIELD(__name, __index, __type) \
 	if (gf_node_get_field(node, __index, &field) != GF_OK) {\
-		GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[HardcodedProtos] Cannot get field index %d\n", __index));\
+		GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[HardcodedProtos] Cannot get field index %d for proto %s\n", __index, __name));\
 		return GF_FALSE; \
 	}\
 	if (field.fieldType != __type) {\
@@ -880,22 +880,9 @@ static Bool Untransform_GetNode(GF_Node *node, Untransform *tr)
 }
 
 
-static void TraverseUntransform(GF_Node *node, void *rs, Bool is_destroy)
+void TraverseUntransformEx(GF_Node *node, void *rs, GroupingNode2D *grp)
 {
-	UntransformStack *stack = (UntransformStack *)gf_node_get_private(node);
 	GF_TraverseState *tr_state = (GF_TraverseState *) rs;
-
-	if (is_destroy) {
-		gf_free(stack);
-		return;
-	}
-
-	if (tr_state->traversing_mode==TRAVERSE_SORT) {
-		if (gf_node_dirty_get(node)) {
-			Untransform_GetNode(node, &stack->untr); /*lets place it below*/
-			gf_node_dirty_clear(node, GF_SG_NODE_DIRTY);
-		}
-	}
 
 #ifndef GPAC_DISABLE_3D
 	if (tr_state->visual->type_3d) {
@@ -920,7 +907,7 @@ static void TraverseUntransform(GF_Node *node, void *rs, Bool is_destroy)
 			visual_3d_set_viewport(tr_state->visual, tr_state->camera->proj_vp);
 			visual_3d_projection_matrix_modified(tr_state->visual);
 
-			gf_node_traverse_children((GF_Node *)&stack->untr, tr_state);
+			gf_node_traverse_children(node, tr_state);
 
 			gf_mx_copy(tr_state->model_matrix, mx_model);
 			memcpy(tr_state->camera, &backup_cam, sizeof(GF_Camera));
@@ -939,7 +926,7 @@ static void TraverseUntransform(GF_Node *node, void *rs, Bool is_destroy)
 			tr_state->ray.dir.z = -FIX_ONE;
 			tr_state->visual->compositor->hit_square_dist=0;
 
-			gf_node_traverse_children((GF_Node *)&stack->untr, tr_state);
+			gf_node_traverse_children(node, tr_state);
 
 			gf_mx_copy(tr_state->model_matrix, mx_model);
 			memcpy(tr_state->camera, &backup_cam, sizeof(GF_Camera));
@@ -950,7 +937,7 @@ static void TraverseUntransform(GF_Node *node, void *rs, Bool is_destroy)
 				tr_state->visual->compositor->hit_square_dist = prev_dist;
 
 		} else {
-			gf_node_traverse_children((GF_Node *)&stack->untr, tr_state);
+			gf_node_traverse_children(node, tr_state);
 
 			gf_mx_copy(tr_state->model_matrix, mx_model);
 			memcpy(tr_state->camera, &backup_cam, sizeof(GF_Camera));
@@ -963,12 +950,27 @@ static void TraverseUntransform(GF_Node *node, void *rs, Bool is_destroy)
 		gf_mx2d_copy(mx2d_backup, tr_state->transform);
 		gf_mx2d_init(tr_state->transform);
 
-		group_2d_traverse((GF_Node *)&stack->untr, (GroupingNode2D *)stack, tr_state);
+		group_2d_traverse(node, grp, tr_state);
 
 		gf_mx2d_copy(tr_state->transform, mx2d_backup);
-
-
 	}
+}
+static void TraverseUntransform(GF_Node *node, void *rs, Bool is_destroy)
+{
+	UntransformStack *stack = (UntransformStack *)gf_node_get_private(node);
+	GF_TraverseState *tr_state = (GF_TraverseState *) rs;
+
+	if (is_destroy) {
+		gf_free(stack);
+		return;
+	}
+	if (tr_state->traversing_mode==TRAVERSE_SORT) {
+		if (gf_node_dirty_get(node)) {
+			Untransform_GetNode(node, &stack->untr); /*lets place it below*/
+			gf_node_dirty_clear(node, GF_SG_NODE_DIRTY);
+		}
+	}
+	TraverseUntransformEx((GF_Node *)&stack->untr, tr_state, (GroupingNode2D *)stack);
 }
 
 void compositor_init_untransform(GF_Compositor *compositor, GF_Node *node)
@@ -1162,7 +1164,7 @@ void compositor_init_test_sensor(GF_Compositor *compositor, GF_Node *node)
 }
 
 
-/*CustomTexture: tests defining new (openGL) textures*/
+/*CustomTexture: tests defining new (OpenGL) textures*/
 typedef struct
 {
     BASE_NODE
@@ -1210,7 +1212,7 @@ static void TraverseCustomTexture(GF_Node *node, void *rs, Bool is_destroy)
 static void CustomTexture_update(GF_TextureHandler *txh)
 {
 #ifndef GPAC_DISABLE_3D
-    u8 data[12];
+    u8 data[16];
 #endif
     CustomTextureStack *stack = gf_node_get_private(txh->owner);
     //alloc texture
@@ -1226,7 +1228,7 @@ static void CustomTexture_update(GF_TextureHandler *txh)
     if (! gf_sc_texture_get_gl_id(txh)) {
         
         //setup some defaults (these two vars are used to setup internal texture format)
-        //in our case we only want to test openGL so no need to fill in the texture width/height stride
+        //in our case we only want to test OpenGL so no need to fill in the texture width/height stride
         //since we will upload ourselves the texture
         txh->transparent = 0;
         txh->pixelformat = GF_PIXEL_RGB;
@@ -1350,7 +1352,9 @@ static void TraverseVRGeometry(GF_Node *node, void *rs, Bool is_destroy)
 		
 		if (tr_state->traversing_mode==TRAVERSE_DRAW_3D) {
 			Bool visible = GF_FALSE;
-
+#ifndef GPAC_DISABLE_LOG
+			const char *pid_name = gf_filter_pid_get_name(txh->stream->odm->pid);
+#endif
 			if (! tr_state->camera_was_dirty && !mesh_was_reset) {
 				visible = (stack->mesh->flags & MESH_WAS_VISIBLE) ? GF_TRUE : GF_FALSE;
 			} else if ((vrinfo.srd_w==vrinfo.srd_max_x) && (vrinfo.srd_h==vrinfo.srd_max_y)) {
@@ -1390,7 +1394,7 @@ static void TraverseVRGeometry(GF_Node *node, void *rs, Bool is_destroy)
 				}
 				if (nb_visible > min_visible_threshold) 
 					visible = GF_TRUE;
-				GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %d Partial sphere is %s - %d sample points visible out of %d\n", txh->stream->OD_ID, visible ? "visible" : "hidden",  nb_visible, i));
+				GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %s Partial sphere is %s - %d sample points visible out of %d\n", pid_name, visible ? "visible" : "hidden",  nb_visible, i));
 			}
 
 			if (visible) {
@@ -1411,7 +1415,7 @@ static void TraverseVRGeometry(GF_Node *node, void *rs, Bool is_destroy)
 				visual_3d_setup_ray(tr_state->visual, tr_state, gx, gy);
 				visual_3d_vrml_drawable_pick(node, tr_state, stack->mesh, NULL);
 				if (tr_state->visual->compositor->hit_node) {
-					GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %d Partial sphere is under gaze coord %d %d\n", txh->stream->OD_ID, tr_state->visual->compositor->gaze_x, tr_state->visual->compositor->gaze_y));
+					GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %s Partial sphere is under gaze coord %d %d\n", pid_name, tr_state->visual->compositor->gaze_x, tr_state->visual->compositor->gaze_y));
 
 					tr_state->visual->compositor->hit_node = NULL;
 				} else {
@@ -1423,23 +1427,29 @@ static void TraverseVRGeometry(GF_Node *node, void *rs, Bool is_destroy)
 			if (vrinfo.has_full_coverage) {
 				if (visible) {
 					if (!txh->is_open) {
-						GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %d stoped on visible partial sphere - starting it\n", txh->stream->OD_ID));
+						GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %s stopped on visible partial sphere - starting it\n", pid_name));
 						assert(txh->stream && txh->stream->odm);
 						txh->stream->odm->disable_buffer_at_next_play = GF_TRUE;
-
-						gf_sc_texture_play(txh, NULL);
+						txh->stream->odm->flags |= GF_ODM_TILED_SHARED_CLOCK;
+						gf_sc_texture_play_from_to(txh, NULL, -1, -1, 1, 0);
 					}
+
 					if (txh->data) {
+						Bool do_show = GF_TRUE;
+						Bool is_full_cover =  (vrinfo.srd_w == vrinfo.srd_max_x) ? GF_TRUE : GF_FALSE;
 						visual_3d_enable_depth_buffer(tr_state->visual, GF_FALSE);
 						visual_3d_enable_antialias(tr_state->visual, GF_FALSE);
-						if (!tr_state->visual->compositor->tvtd || (vrinfo.srd_w != vrinfo.srd_max_x)) {
+						if ((tr_state->visual->compositor->tvtd == TILE_DEBUG_FULL) && !is_full_cover) do_show = GF_FALSE;
+						else if ((tr_state->visual->compositor->tvtd == TILE_DEBUG_PARTIAL) && is_full_cover) do_show = GF_FALSE;
+
+						if (do_show) {
 							visual_3d_draw(tr_state, stack->mesh);
 						}
 						visual_3d_enable_depth_buffer(tr_state->visual, GF_TRUE);
 					}
 				} else {
 					if (txh->is_open) {
-						GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %d playing on hidden partial sphere - stoping it\n", txh->stream->OD_ID));
+						GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %s playing on hidden partial sphere - stopping it\n", pid_name));
 						gf_sc_texture_stop_no_unregister(txh);
 					}
 				}

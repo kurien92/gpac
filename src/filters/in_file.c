@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2020
+ *			Copyright (c) Telecom ParisTech 2017-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / generic FILE input filter
@@ -133,7 +133,7 @@ static GF_Err filein_initialize(GF_Filter *filter)
 	}
 
 	if (!ctx->file) {
-		ctx->file = gf_fopen_ex(src, prev_url, "rb");
+		ctx->file = gf_fopen_ex(src, prev_url, "rb", GF_FALSE);
 	}
 
 	if (old_file) {
@@ -219,12 +219,16 @@ static GF_FilterProbeScore filein_probe_url(const char *url, const char *mime_ty
 	if (!strcmp(url, "null")) return GF_FPROBE_SUPPORTED;
 	if (!strcmp(url, "rand")) return GF_FPROBE_SUPPORTED;
 	if (!strcmp(url, "randsc")) return GF_FPROBE_SUPPORTED;
+	if (!strncmp(src, "isobmff://", 10)) return GF_FPROBE_SUPPORTED;
 	if (!strncmp(url, "gfio://", 7)) {
 		GF_FileIO *gfio = gf_fileio_from_url(url);
 		if (gfio && gf_fileio_read_mode(gfio))
 			return GF_FPROBE_SUPPORTED;
 		return GF_FPROBE_NOT_SUPPORTED;
 	}
+	if (strstr(src, "://"))
+		return GF_FPROBE_NOT_SUPPORTED;
+
 
 	//strip any fragment identifer
 	ext_start = gf_file_ext_start(url);
@@ -310,6 +314,16 @@ static Bool filein_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 		filein_initialize(filter);
 		gf_filter_post_process_task(filter);
 		break;
+	case GF_FEVT_FILE_DELETE:
+		if (ctx->is_end && !strcmp(evt->file_del.url, "__gpac_self__")) {
+			if (ctx->file) {
+				gf_fclose(ctx->file);
+				ctx->file = NULL;
+			}
+			gf_file_delete(ctx->src);
+		}
+		break;
+
 	default:
 		break;
 	}
@@ -340,13 +354,14 @@ static GF_Err filein_process(GF_Filter *filter)
 	if (ctx->pck_out)
 		return GF_EOS;
 	if (ctx->pid && gf_filter_pid_would_block(ctx->pid)) {
-		assert(0);
 		return GF_OK;
 	}
 
 	if (ctx->full_file_only && ctx->pid && !ctx->do_reconfigure && ctx->cached_set) {
-		ctx->is_end = GF_TRUE;
 		pck = gf_filter_pck_new_shared(ctx->pid, ctx->block, 0, filein_pck_destructor);
+		if (!pck) return GF_OUT_OF_MEM;
+
+		ctx->is_end = GF_TRUE;
 		gf_filter_pck_set_framing(pck, ctx->file_pos ? GF_FALSE : GF_TRUE, ctx->is_end);
 		gf_filter_pck_set_sap(pck, GF_FILTER_SAP_1);
 		ctx->pck_out = GF_TRUE;
@@ -414,8 +429,7 @@ static GF_Err filein_process(GF_Filter *filter)
 			if (e) return e;
 		}
 		pck = gf_filter_pck_new_shared(ctx->pid, ctx->block, ctx->block_size, filein_pck_destructor);
-		if (!pck)
-			return GF_OK;
+		if (!pck) return GF_OUT_OF_MEM;
 
 		gf_filter_pck_set_framing(pck, ctx->file_pos ? GF_FALSE : GF_TRUE, GF_FALSE);
 		gf_filter_pck_set_sap(pck, GF_FILTER_SAP_1);
@@ -497,14 +511,16 @@ static GF_Err filein_process(GF_Filter *filter)
 	}
 
 	pck = gf_filter_pck_new_shared(ctx->pid, ctx->block, nb_read, filein_pck_destructor);
-	if (!pck)
-		return GF_OK;
+	if (!pck) return GF_OUT_OF_MEM;
 
 	gf_filter_pck_set_byte_offset(pck, ctx->file_pos);
 
 	if (ctx->file_size && (ctx->file_pos + nb_read == ctx->file_size)) {
 		ctx->is_end = GF_TRUE;
 		gf_filter_pid_set_info(ctx->pid, GF_PROP_PID_DOWN_BYTES, &PROP_LONGUINT(ctx->file_size) );
+	} else if (ctx->end_pos && (ctx->file_pos + nb_read == ctx->end_pos)) {
+		ctx->is_end = GF_TRUE;
+		gf_filter_pid_set_info(ctx->pid, GF_PROP_PID_DOWN_BYTES, &PROP_LONGUINT(ctx->range.den - ctx->range.num) );
 	} else {
 		if (nb_read < to_read) {
 			Bool is_eof;
@@ -549,7 +565,7 @@ static GF_Err filein_process(GF_Filter *filter)
 
 static const GF_FilterArgs FileInArgs[] =
 {
-	{ OFFS(src), "location of source content", GF_PROP_NAME, NULL, NULL, 0},
+	{ OFFS(src), "location of source file", GF_PROP_NAME, NULL, NULL, 0},
 	{ OFFS(block_size), "block size used to read file. 0 means 5000 if file less than 500m, 1M otherwise", GF_PROP_UINT, "0", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(range), "byte range", GF_PROP_FRACTION64, "0-0", NULL, 0},
 	{ OFFS(ext), "override file extension", GF_PROP_NAME, NULL, NULL, 0},
@@ -571,13 +587,14 @@ GF_FilterRegister FileInRegister = {
 	"Note: Unless disabled at session level (see [-no-probe](CORE) ), file extensions are usually ignored and format probing is done on the first data block.\n"
 	"The special file name `null` is used for creating a file with no data, needed by some filters such as [dasher](dasher).\n"
 	"The special file name `rand` is used to generate random data.\n"
-	"The special file name `randsc` is used to generate random data with fake startcodes (0x000001).\n"
+	"The special file name `randsc` is used to generate random data with `0x000001` start-code prefix.\n"
 	"\n"
 	"The filter handles both files and GF_FileIO objects as input URL.\n"
 	)
 	.private_size = sizeof(GF_FileInCtx),
 	.args = FileInArgs,
 	.initialize = filein_initialize,
+	.flags = GF_FS_REG_FORCE_REMUX,
 	SETCAPS(FileInCaps),
 	.finalize = filein_finalize,
 	.process = filein_process,

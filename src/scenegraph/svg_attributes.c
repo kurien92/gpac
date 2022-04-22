@@ -2,7 +2,7 @@
  *					GPAC Multimedia Framework
  *
  *			Authors: Cyril Concolato, Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2004-2012
+ *			Copyright (c) Telecom ParisTech 2004-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / SVG Loader module
@@ -211,6 +211,7 @@ static const struct dom_event_def {
 
 };
 
+#ifdef WIN32
 /** In order to have the same representation of laser/svg media on unix and windows
   * we have to force windows to use the same rounding method as the glibc.
   * See: http://pubs.opengroup.org/onlinepubs/009695399/functions/fprintf.html
@@ -251,7 +252,6 @@ double round_float_hte(double value, int digits)
 	return value;
 };
 
-#ifdef WIN32
 #define _FIX2FLT(x) (round_float_hte(FIX2FLT(x),6))
 #else
 #define _FIX2FLT(x) FIX2FLT(x)
@@ -298,6 +298,7 @@ GF_DOMEventCategory gf_dom_event_get_category(GF_EventType type)
 static const struct predef_keyid {
 	GF_KeyCode key_code;
 	const char *name;
+	const char *friendly_name;
 } predefined_key_identifiers[] =
 {
 	{ GF_KEY_ACCEPT, "Accept" },
@@ -406,78 +407,78 @@ static const struct predef_keyid {
 	{ GF_KEY_VOLUMEUP, "VolumeUp" },
 	{ GF_KEY_WIN, "Win" },
 	{ GF_KEY_ZOOM, "Zoom" },
-	{ GF_KEY_BACKSPACE, "U+0008" },
-	{ GF_KEY_TAB, "U+0009" },
-	{ GF_KEY_CANCEL, "U+0018" },
-	{ GF_KEY_ESCAPE, "U+001B" },
-	{ GF_KEY_SPACE, "U+0020" },
-	{ GF_KEY_EXCLAMATION, "U+0021" },
-	{ GF_KEY_QUOTATION, "U+0022" },
-	{ GF_KEY_NUMBER, "U+0023" },
-	{ GF_KEY_DOLLAR, "U+0024" },
-	{ GF_KEY_AMPERSAND, "U+0026" },
-	{ GF_KEY_APOSTROPHE, "U+0027" },
-	{ GF_KEY_LEFTPARENTHESIS, "U+0028" },
-	{ GF_KEY_RIGHTPARENTHESIS, "U+0029" },
-	{ GF_KEY_STAR, "U+002A" },
-	{ GF_KEY_PLUS, "U+002B" },
-	{ GF_KEY_COMMA, "U+002C" },
-	{ GF_KEY_HYPHEN, "U+002D" },
-	{ GF_KEY_FULLSTOP, "U+002E" },
-	{ GF_KEY_SLASH, "U+002F" },
-	{ GF_KEY_0, "U+0030" },
-	{ GF_KEY_1, "U+0031" },
-	{ GF_KEY_2, "U+0032" },
-	{ GF_KEY_3, "U+0033" },
-	{ GF_KEY_4, "U+0034" },
-	{ GF_KEY_5, "U+0035" },
-	{ GF_KEY_6, "U+0036" },
-	{ GF_KEY_7, "U+0037" },
-	{ GF_KEY_8, "U+0038" },
-	{ GF_KEY_9, "U+0039" },
-	{ GF_KEY_COLON, "U+003A" },
-	{ GF_KEY_SEMICOLON, "U+003B" },
-	{ GF_KEY_LESSTHAN, "U+003C" },
-	{ GF_KEY_EQUALS, "U+003D" },
-	{ GF_KEY_GREATERTHAN, "U+003E" },
-	{ GF_KEY_QUESTION, "U+003F" },
-	{ GF_KEY_AT, "U+0040" },
-	{ GF_KEY_A, "U+0041" },
-	{ GF_KEY_B, "U+0042" },
-	{ GF_KEY_C, "U+0043" },
-	{ GF_KEY_D, "U+0044" },
-	{ GF_KEY_E, "U+0045" },
-	{ GF_KEY_F, "U+0046" },
-	{ GF_KEY_G, "U+0047" },
-	{ GF_KEY_H, "U+0048" },
-	{ GF_KEY_I, "U+0049" },
-	{ GF_KEY_J, "U+004A" },
-	{ GF_KEY_K, "U+004B" },
-	{ GF_KEY_L, "U+004C" },
-	{ GF_KEY_M, "U+004D" },
-	{ GF_KEY_N, "U+004E" },
-	{ GF_KEY_O, "U+004F" },
-	{ GF_KEY_P, "U+0050" },
-	{ GF_KEY_Q, "U+0051" },
-	{ GF_KEY_R, "U+0052" },
-	{ GF_KEY_S, "U+0053" },
-	{ GF_KEY_T, "U+0054" },
-	{ GF_KEY_U, "U+0055" },
-	{ GF_KEY_V, "U+0056" },
-	{ GF_KEY_W, "U+0057" },
-	{ GF_KEY_X, "U+0058" },
-	{ GF_KEY_Y, "U+0059" },
-	{ GF_KEY_Z, "U+005A" },
-	{ GF_KEY_LEFTSQUAREBRACKET, "U+005B" },
-	{ GF_KEY_BACKSLASH, "U+005C" },
-	{ GF_KEY_RIGHTSQUAREBRACKET, "U+005D" },
-	{ GF_KEY_CIRCUM, "U+005E" },
-	{ GF_KEY_UNDERSCORE, "U+005F" },
-	{ GF_KEY_GRAVEACCENT, "U+0060" },
-	{ GF_KEY_LEFTCURLYBRACKET, "U+007B" },
-	{ GF_KEY_PIPE, "U+007C" },
-	{ GF_KEY_RIGHTCURLYBRACKET, "U+007D" },
-	{ GF_KEY_DEL, "U+007F" },
+	{ GF_KEY_BACKSPACE, "U+0008", "backspace" },
+	{ GF_KEY_TAB, "U+0009", "tab" },
+	{ GF_KEY_CANCEL, "U+0018", "cancel" },
+	{ GF_KEY_ESCAPE, "U+001B", "esc" },
+	{ GF_KEY_SPACE, "U+0020", "space" },
+	{ GF_KEY_EXCLAMATION, "U+0021", "!" },
+	{ GF_KEY_QUOTATION, "U+0022", "\"" },
+	{ GF_KEY_NUMBER, "U+0023", "#" },
+	{ GF_KEY_DOLLAR, "U+0024", "$" },
+	{ GF_KEY_AMPERSAND, "U+0026", "&" },
+	{ GF_KEY_APOSTROPHE, "U+0027", "'" },
+	{ GF_KEY_LEFTPARENTHESIS, "U+0028", "(" },
+	{ GF_KEY_RIGHTPARENTHESIS, "U+0029", ")" },
+	{ GF_KEY_STAR, "U+002A", "*" },
+	{ GF_KEY_PLUS, "U+002B", "+" },
+	{ GF_KEY_COMMA, "U+002C", "," },
+	{ GF_KEY_HYPHEN, "U+002D", "-" },
+	{ GF_KEY_FULLSTOP, "U+002E", "." },
+	{ GF_KEY_SLASH, "U+002F", "/" },
+	{ GF_KEY_0, "U+0030", "0" },
+	{ GF_KEY_1, "U+0031", "1" },
+	{ GF_KEY_2, "U+0032", "2" },
+	{ GF_KEY_3, "U+0033", "3" },
+	{ GF_KEY_4, "U+0034", "4" },
+	{ GF_KEY_5, "U+0035", "5" },
+	{ GF_KEY_6, "U+0036", "6" },
+	{ GF_KEY_7, "U+0037", "7" },
+	{ GF_KEY_8, "U+0038", "8" },
+	{ GF_KEY_9, "U+0039", "9" },
+	{ GF_KEY_COLON, "U+003A", ":" },
+	{ GF_KEY_SEMICOLON, "U+003B", ";" },
+	{ GF_KEY_LESSTHAN, "U+003C", "<" },
+	{ GF_KEY_EQUALS, "U+003D", "=" },
+	{ GF_KEY_GREATERTHAN, "U+003E", ">" },
+	{ GF_KEY_QUESTION, "U+003F", "?" },
+	{ GF_KEY_AT, "U+0040", "@" },
+	{ GF_KEY_A, "U+0041", "A" },
+	{ GF_KEY_B, "U+0042", "B" },
+	{ GF_KEY_C, "U+0043", "C" },
+	{ GF_KEY_D, "U+0044", "D" },
+	{ GF_KEY_E, "U+0045", "E" },
+	{ GF_KEY_F, "U+0046", "F" },
+	{ GF_KEY_G, "U+0047", "G" },
+	{ GF_KEY_H, "U+0048", "H" },
+	{ GF_KEY_I, "U+0049", "I" },
+	{ GF_KEY_J, "U+004A", "J" },
+	{ GF_KEY_K, "U+004B", "K" },
+	{ GF_KEY_L, "U+004C", "L" },
+	{ GF_KEY_M, "U+004D", "M" },
+	{ GF_KEY_N, "U+004E", "N" },
+	{ GF_KEY_O, "U+004F", "O" },
+	{ GF_KEY_P, "U+0050", "P" },
+	{ GF_KEY_Q, "U+0051", "Q" },
+	{ GF_KEY_R, "U+0052", "R" },
+	{ GF_KEY_S, "U+0053", "S" },
+	{ GF_KEY_T, "U+0054", "T" },
+	{ GF_KEY_U, "U+0055", "U" },
+	{ GF_KEY_V, "U+0056", "V" },
+	{ GF_KEY_W, "U+0057", "W" },
+	{ GF_KEY_X, "U+0058", "X" },
+	{ GF_KEY_Y, "U+0059", "Y" },
+	{ GF_KEY_Z, "U+005A", "Z" },
+	{ GF_KEY_LEFTSQUAREBRACKET, "U+005B", "[" },
+	{ GF_KEY_BACKSLASH, "U+005C", "\\" },
+	{ GF_KEY_RIGHTSQUAREBRACKET, "U+005D", "]" },
+	{ GF_KEY_CIRCUM, "U+005E", "^" },
+	{ GF_KEY_UNDERSCORE, "U+005F", "_" },
+	{ GF_KEY_GRAVEACCENT, "U+0060", "`" },
+	{ GF_KEY_LEFTCURLYBRACKET, "U+007B", "{" },
+	{ GF_KEY_PIPE, "U+007C", "|" },
+	{ GF_KEY_RIGHTCURLYBRACKET, "U+007D", "}" },
+	{ GF_KEY_DEL, "U+007F", "del" },
 	{ GF_KEY_INVERTEXCLAMATION, "U+00A1" },
 	{ GF_KEY_DEADGRAVE, "U+0300" },
 	{ GF_KEY_DEADEACUTE, "U+0301" },
@@ -493,7 +494,7 @@ static const struct predef_keyid {
 	{ GF_KEY_DEADCEDILLA, "U+0327" },
 	{ GF_KEY_DEADOGONEK, "U+0328" },
 	{ GF_KEY_DEADIOTA, "U+0345" },
-	{ GF_KEY_EURO, "U+20AC" },
+	{ GF_KEY_EURO, "U+20AC"},
 	{ GF_KEY_DEADVOICESOUND, "U+3099" },
 	{ GF_KEY_DEADSEMIVOICESOUND, "U+309A" },
 	{ GF_KEY_CHANNELUP, "ChannelUp" },
@@ -514,6 +515,15 @@ const char *gf_dom_get_key_name(GF_KeyCode key_identifier)
 {
 	u32 count = sizeof(predefined_key_identifiers) / sizeof(struct predef_keyid);
 	if (!key_identifier || count<= (u32) key_identifier) return "Unknown";
+	return predefined_key_identifiers[key_identifier-1].name;
+}
+GF_EXPORT
+const char *gf_dom_get_friendly_name(GF_KeyCode key_identifier)
+{
+	u32 count = sizeof(predefined_key_identifiers) / sizeof(struct predef_keyid);
+	if (!key_identifier || count<= (u32) key_identifier) return "Unknown";
+	if (predefined_key_identifiers[key_identifier-1].friendly_name)
+		return predefined_key_identifiers[key_identifier-1].friendly_name;
 	return predefined_key_identifiers[key_identifier-1].name;
 }
 
@@ -3037,6 +3047,19 @@ static void svg_parse_focus(GF_Node *e,  SVG_Focus *o, char *attribute_content)
 	}
 }
 
+static void svg_parse_clippath(GF_Node *e, SVG_ClipPath *o, char *attribute_content)
+{
+	if (o->target.string) gf_free(o->target.string);
+	o->target.string = NULL;
+	o->target.target = NULL;
+
+	if (!strnicmp(attribute_content, "url(", 4)) {
+		char *sep = strrchr(attribute_content, ')');
+		if (sep) sep[0] = 0;
+		svg_parse_iri(e, &o->target, attribute_content+4);
+		if (sep) sep[0] = ')';
+	}
+}
 /* end of Basic SVG datatype parsing functions */
 
 void svg_parse_one_anim_value(GF_Node *n, SMIL_AnimateValue *anim_value, char *attribute_content, u8 anim_value_type)
@@ -3248,7 +3271,6 @@ GF_Err gf_svg_parse_attribute(GF_Node *n, GF_FieldInfo *info, char *attribute_co
 	case SVG_Focusable_datatype:
 		svg_parse_focusable((SVG_Focusable*)info->far_ptr, attribute_content);
 		break;
-
 	case SVG_InitialVisibility_datatype:
 		svg_parse_initialvisibility((SVG_InitialVisibility*)info->far_ptr, attribute_content);
 		break;
@@ -3432,6 +3454,10 @@ GF_Err gf_svg_parse_attribute(GF_Node *n, GF_FieldInfo *info, char *attribute_co
 	case SVG_Focus_datatype:
 		svg_parse_focus(n, (SVG_Focus*)info->far_ptr, attribute_content);
 		break;
+	case SVG_ClipPath_datatype:
+		svg_parse_clippath(n, (SVG_ClipPath*)info->far_ptr, attribute_content);
+		break;
+
 	case LASeR_Choice_datatype:
 		laser_parse_choice((LASeR_Choice*)info->far_ptr, attribute_content);
 		break;
@@ -3727,6 +3753,12 @@ void *gf_svg_create_attribute_value(u32 attribute_type)
 		SVG_Focus *foc;
 		GF_SAFEALLOC(foc, SVG_Focus)
 		return foc;
+	}
+	case SVG_ClipPath_datatype:
+	{
+		SVG_ClipPath *cp;
+		GF_SAFEALLOC(cp, SVG_ClipPath)
+		return cp;
 	}
 	case SMIL_AttributeName_datatype:
 	{
@@ -4548,7 +4580,7 @@ char *gf_svg_dump_attribute(GF_Node *elt, GF_FieldInfo *info)
 	case SVG_FontFamily_datatype:
 	{
 		SVG_FontFamily *f = (SVG_FontFamily *)info->far_ptr;
-		return gf_strdup( (f->type==SVG_FONTFAMILY_INHERIT) ? "inherit" : (const char *) f->value);
+		return gf_strdup( (!f->value || (f->type==SVG_FONTFAMILY_INHERIT)) ? "inherit" : (const char *) f->value);
 	}
 
 	case SVG_PreserveAspectRatio_datatype:
@@ -4593,6 +4625,12 @@ char *gf_svg_dump_attribute(GF_Node *elt, GF_FieldInfo *info)
 			sprintf(tmp, "#%s", foc->target.string);
 			return gf_strdup(tmp);
 		}
+	}
+	case SVG_ClipPath_datatype:
+	{
+		SVG_ClipPath *cp = (SVG_ClipPath *)info->far_ptr;
+		sprintf(tmp, "url(#%s)", cp->target.string);
+		return gf_strdup(tmp);
 	}
 	break;
 	case SVG_Focusable_datatype:
@@ -4886,7 +4924,7 @@ char *gf_svg_dump_attribute_indexed(GF_Node *elt, GF_FieldInfo *info)
 	case SVG_PointerEvents_datatype:
 		break;
 	case XMLRI_List_datatype:
-		return gf_strdup( (char *) info->far_ptr);
+		return gf_strdup(info->far_ptr ? (char *) info->far_ptr : "");
 
 	case SVG_Points_datatype:
 	{
@@ -5295,6 +5333,14 @@ Bool gf_svg_attributes_equal(GF_FieldInfo *f1, GF_FieldInfo *f2)
 	}
 	break;
 
+	case SVG_ClipPath_datatype:
+	{
+		SVG_ClipPath *cp1 = (SVG_ClipPath *) f1->far_ptr;
+		SVG_ClipPath *cp2 = (SVG_ClipPath *)f2->far_ptr;
+		return (cp1->target.string && cp2->target.string && !strcmp(cp1->target.string, cp2->target.string)) ? 1 : 0;
+	}
+	break;
+
 	case DOM_StringList_datatype:
 	{
 		GF_List *l1 = *(GF_List **) f1->far_ptr;
@@ -5403,7 +5449,7 @@ Bool gf_svg_attributes_equal(GF_FieldInfo *f1, GF_FieldInfo *f2)
 		return 1;
 	}
 	default:
-		GF_LOG(GF_LOG_WARNING, GF_LOG_INTERACT, ("[SVG Attributes] comparaison for field %s of type %s not supported\n", f1->name ? f1->name : "unknown", gf_svg_attribute_type_to_string(f1->fieldType)));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_SCENE, ("[SVG Attributes] comparaison for field %s of type %s not supported\n", f1->name ? f1->name : "unknown", gf_svg_attribute_type_to_string(f1->fieldType)));
 		return 0;
 	}
 }
@@ -5418,7 +5464,7 @@ static void svg_color_clamp(SVG_Color *a)
 static GF_Err svg_color_muladd(Fixed alpha, SVG_Color *a, Fixed beta, SVG_Color *b, SVG_Color *c, Bool clamp)
 {
 	if (a->type != SVG_COLOR_RGBCOLOR || b->type != SVG_COLOR_RGBCOLOR) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] only RGB colors are additive\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] only RGB colors are additive\n"));
 		return GF_BAD_PARAM;
 	}
 	c->type = SVG_COLOR_RGBCOLOR;
@@ -5433,11 +5479,11 @@ static GF_Err svg_number_muladd(Fixed alpha, SVG_Number *a, Fixed beta, SVG_Numb
 {
 	if (!a || !b || !c) return GF_BAD_PARAM;
 	if (a->type != b->type) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] cannot add lengths of mismatching types\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] cannot add lengths of mismatching types\n"));
 		return GF_BAD_PARAM;
 	}
 	if (a->type == SVG_NUMBER_INHERIT || a->type == SVG_NUMBER_AUTO) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] cannot add lengths\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] cannot add lengths\n"));
 		return GF_BAD_PARAM;
 	}
 	c->value = gf_mulfix(alpha, a->value) + gf_mulfix(beta, b->value);
@@ -5704,9 +5750,11 @@ static GF_Err svg_dasharray_copy(SVG_StrokeDashArray *a, SVG_StrokeDashArray *b)
 	a->type = b->type;
 	a->array.count = b->array.count;
 	a->array.units = (u8*)gf_malloc(sizeof(u8)*a->array.count);
-	memcpy(a->array.units, b->array.units, sizeof(u8)*a->array.count);
+	if (a->array.count)
+		memcpy(a->array.units, b->array.units, sizeof(u8)*a->array.count);
 	a->array.vals = (Fixed*)gf_malloc(sizeof(Fixed)*a->array.count);
-	memcpy(a->array.vals, b->array.vals, sizeof(Fixed)*a->array.count);
+	if (a->array.count)
+		memcpy(a->array.vals, b->array.vals, sizeof(Fixed)*a->array.count);
 	return GF_OK;
 }
 
@@ -5736,16 +5784,9 @@ static GF_Err svg_matrix_muladd(Fixed alpha, GF_Matrix2D *a, Fixed beta, GF_Matr
 		c->m[4] = a->m[4];
 		c->m[5] = gf_mulfix(alpha, a->m[5]) + gf_mulfix(beta, b->m[5]);
 	} else {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] matrix operations not supported\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] matrix operations not supported\n"));
 		return GF_BAD_PARAM;
 	}
-	return GF_OK;
-}
-
-static GF_Err laser_size_muladd(Fixed alpha, LASeR_Size *sza, Fixed beta, LASeR_Size *szb, LASeR_Size *szc)
-{
-	szc->width  = gf_mulfix(alpha, sza->width)  + gf_mulfix(beta, szb->width);
-	szc->height = gf_mulfix(alpha, sza->height) + gf_mulfix(beta, szb->height);
 	return GF_OK;
 }
 
@@ -5783,7 +5824,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 		SVG_Paint *pb = (SVG_Paint *)b->far_ptr;
 		SVG_Paint *pc = (SVG_Paint *)c->far_ptr;
 		if (pa->type != pb->type || pa->type != SVG_PAINT_COLOR || pb->type != SVG_PAINT_COLOR) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] only color paints are additive\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] only color paints are additive\n"));
 			return GF_BAD_PARAM;
 		}
 		pc->type = SVG_PAINT_COLOR;
@@ -5823,7 +5864,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 			if (ta->is_ref == tb->is_ref) {
 				return svg_matrix_muladd(alpha, &ta->mat, beta, &tb->mat, &tc->mat);
 			} else {
-				GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] matrix operations not supported\n"));
+				GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] matrix operations not supported\n"));
 				return GF_NOT_SUPPORTED;
 			}
 		} else {
@@ -5832,7 +5873,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 			/*TOCHECK what is this test*/
 			/*
 						if (alpha != FIX_ONE) {
-							GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] matrix operations not supported\n"));
+							GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] matrix operations not supported\n"));
 							return GF_NOT_SUPPORTED;
 						}
 			*/
@@ -5854,7 +5895,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 				gf_mx2d_add_skew_y(&tmp, gf_mulfix(*(Fixed*)b->far_ptr, beta));
 				break;
 			default:
-				GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] copy of attributes %s not supported\n", a->name));
+				GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] copy of attributes %s not supported\n", a->name));
 				return GF_NOT_SUPPORTED;
 			}
 			gf_mx2d_add_matrix(&tmp, &((SVG_Transform*)a->far_ptr)->mat);
@@ -5866,7 +5907,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 		if (b->fieldType == SVG_Transform_Translate_datatype) {
 			return svg_point_muladd(alpha, (SVG_Point*)a->far_ptr, beta, (SVG_Point*)b->far_ptr, (SVG_Point*)c->far_ptr);
 		} else {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] matrix operations not supported\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] matrix operations not supported\n"));
 			return GF_NOT_SUPPORTED;
 		}
 
@@ -5883,7 +5924,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 				return svg_point_muladd(alpha, (SVG_Point*)a->far_ptr, beta, (SVG_Point*)b->far_ptr, (SVG_Point*)c->far_ptr);
 			}
 		} else {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] matrix operations not supported\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] matrix operations not supported\n"));
 			return GF_NOT_SUPPORTED;
 		}
 
@@ -5891,7 +5932,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 		if (b->fieldType == SVG_Transform_Rotate_datatype) {
 			return svg_point_angle_muladd(alpha, (SVG_Point_Angle*)a->far_ptr, beta, (SVG_Point_Angle*)b->far_ptr, (SVG_Point_Angle*)c->far_ptr);
 		} else {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] matrix operations not supported\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] matrix operations not supported\n"));
 			return GF_NOT_SUPPORTED;
 		}
 
@@ -5900,7 +5941,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 			*(Fixed*)c->far_ptr = gf_mulfix(alpha, *(Fixed*)a->far_ptr) + gf_mulfix(beta, *(Fixed*)b->far_ptr);
 			return GF_OK;
 		} else {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] matrix operations not supported\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] matrix operations not supported\n"));
 			return GF_NOT_SUPPORTED;
 		}
 
@@ -5909,7 +5950,7 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 			*(Fixed*)c->far_ptr = gf_mulfix(alpha, *(Fixed*)a->far_ptr) + gf_mulfix(beta, *(Fixed*)b->far_ptr);
 			return GF_OK;
 		} else {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] matrix operations not supported\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] matrix operations not supported\n"));
 			return GF_NOT_SUPPORTED;
 		}
 
@@ -5934,7 +5975,13 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 	}
 	break;
 	case LASeR_Size_datatype:
-		laser_size_muladd(alpha, (LASeR_Size*)a->far_ptr, beta, (LASeR_Size*)b->far_ptr, (LASeR_Size*)c->far_ptr);
+	{
+		LASeR_Size *sza = (LASeR_Size*)a->far_ptr;
+		LASeR_Size *szb = (LASeR_Size*)b->far_ptr;
+		LASeR_Size *szc = (LASeR_Size*)c->far_ptr;
+		szc->width  = gf_mulfix(alpha, sza->width)  + gf_mulfix(beta, szb->width);
+		szc->height = gf_mulfix(alpha, sza->height) + gf_mulfix(beta, szb->height);
+	}
 		break;
 
 	/* Keyword types */
@@ -5994,8 +6041,9 @@ GF_Err gf_svg_attributes_muladd(Fixed alpha, GF_FieldInfo *a,
 	case SMIL_Times_datatype:
 	case SMIL_Duration_datatype:
 	case SMIL_RepeatCount_datatype:
+	case SVG_ClipPath_datatype:
 	default:
-		GF_LOG(GF_LOG_WARNING, GF_LOG_INTERACT, ("[SVG Attributes] addition for attributes %s of type %s not supported\n", a->name, gf_svg_attribute_type_to_string(a->fieldType)));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_SCENE, ("[SVG Attributes] addition for attributes %s of type %s not supported\n", a->name, gf_svg_attribute_type_to_string(a->fieldType)));
 		return GF_NOT_SUPPORTED;
 	}
 	return GF_OK;
@@ -6085,7 +6133,7 @@ GF_Err gf_svg_attributes_copy(GF_FieldInfo *a, GF_FieldInfo *b, Bool clamp)
 			gf_mx2d_copy(((SVG_Transform *)a->far_ptr)->mat, ((SVG_Transform *)b->far_ptr)->mat);
 			break;
 		default:
-			GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[SVG Attributes] forbidden type of transform\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_SCENE, ("[SVG Attributes] forbidden type of transform\n"));
 			return GF_NOT_SUPPORTED;
 		}
 		return GF_OK;
@@ -6170,7 +6218,15 @@ GF_Err gf_svg_attributes_copy(GF_FieldInfo *a, GF_FieldInfo *b, Bool clamp)
 		if ( ((SVG_Focus *)b->far_ptr)->target.string)
 			((SVG_Focus *)a->far_ptr)->target.string = gf_strdup( ((SVG_Focus *)b->far_ptr)->target.string);
 	}
-	return GF_OK;
+		return GF_OK;
+
+	case SVG_ClipPath_datatype:
+		if ( ((SVG_ClipPath *)b->far_ptr)->target.string) {
+			if (((SVG_ClipPath *)a->far_ptr)->target.string)
+				gf_free(((SVG_ClipPath *)a->far_ptr)->target.string);
+			((SVG_ClipPath *)a->far_ptr)->target.string = gf_strdup( ((SVG_ClipPath *)b->far_ptr)->target.string);
+		}
+		return GF_OK;
 
 	case SMIL_Times_datatype:
 	{
@@ -6237,7 +6293,7 @@ GF_Err gf_svg_attributes_copy(GF_FieldInfo *a, GF_FieldInfo *b, Bool clamp)
 	case SMIL_AnimateValues_datatype:
 	case SMIL_RepeatCount_datatype:
 	default:
-		GF_LOG(GF_LOG_WARNING, GF_LOG_INTERACT, ("[SVG Attributes] copy of attributes %s of type %s not supported\n", a->name, gf_svg_attribute_type_to_string(a->fieldType)));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_SCENE, ("[SVG Attributes] copy of attributes %s of type %s not supported\n", a->name, gf_svg_attribute_type_to_string(a->fieldType)));
 		return GF_OK;
 	}
 	return GF_OK;
@@ -6375,7 +6431,7 @@ GF_Err gf_svg_attributes_interpolate(GF_FieldInfo *a, GF_FieldInfo *b, GF_FieldI
 	case SMIL_Duration_datatype:
 	case SMIL_RepeatCount_datatype:
 	default:
-		GF_LOG(GF_LOG_WARNING, GF_LOG_INTERACT, ("[SVG Attributes] interpolation for attributes %s of type %s not supported\n", a->name, gf_svg_attribute_type_to_string(a->fieldType)));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_SCENE, ("[SVG Attributes] interpolation for attributes %s of type %s not supported\n", a->name, gf_svg_attribute_type_to_string(a->fieldType)));
 		return GF_OK;
 	}
 	return GF_OK;
@@ -6540,6 +6596,8 @@ const char *gf_svg_attribute_type_to_string(u32 att_type)
 		return "GradientOffset";
 	case SVG_Focus_datatype	:
 		return "Focus";
+	case SVG_ClipPath_datatype	:
+		return "ClipPath";
 	case SVG_Clock_datatype	:
 		return "Clock";
 	case DOM_String_datatype	:

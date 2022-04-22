@@ -137,7 +137,7 @@ static int X11_GetXVideoPort(GF_VideoOutput *vout, u32 pixel_format, Bool check_
 		formats = XvListImageFormats(xwin->display, adaptors[i].base_id, &num_formats);
 
 		for (j=0; j<num_formats && (selected_port == -1 ); j++) {
-			XvAttribute *attr;
+			XvAttribute *attr=NULL;
 			int k, nb_attributes;
 			u32 pformat = X11_GetPixelFormat(formats[j].id);
 
@@ -161,6 +161,11 @@ static int X11_GetXVideoPort(GF_VideoOutput *vout, u32 pixel_format, Bool check_
 									}
 					*/
 				}
+				if (attr) {
+					free(attr);
+					attr=NULL;
+				}
+
 				if (check_color && !has_color_key) continue;
 
 				if (XvGrabPort(xwin->display, port, CurrentTime) == Success) {
@@ -235,7 +240,7 @@ GF_Err X11_Blit(struct _video_out *vout, GF_VideoSurface *video_src, GF_Window *
 	}
 
 	/*different size, recreate an image*/
-	if ((xwin->overlay->width != video_src->width) || (xwin->overlay->height != video_src->height)) {
+	if (xwin->overlay && ((xwin->overlay->width != video_src->width) || (xwin->overlay->height != video_src->height))) {
 		XFree(xwin->overlay);
 		xwin->overlay = XvCreateImage(xwin->display, xwin->xvport, xwin->xv_pf_format, NULL, video_src->width, video_src->height);
 		if (!xwin->overlay) return GF_IO_ERR;
@@ -1022,6 +1027,13 @@ GF_Err X11_SetFullScreen (struct _video_out * vout, u32 bFullScreenOn, u32 * scr
 		XSetInputFocus(xWindow->display, xWindow->full_wnd, RevertToNone, CurrentTime);
 		XRaiseWindow(xWindow->display, xWindow->full_wnd);
 		XGrabKeyboard(xWindow->display, xWindow->full_wnd, True, GrabModeAsync, GrabModeAsync, CurrentTime);
+
+		GF_Event evt;
+		memset(&evt, 0, sizeof(GF_Event));
+		evt.type = GF_EVENT_SIZE;
+		evt.size.width = xWindow->w_width;
+		evt.size.height = xWindow->w_height;
+		vout->on_event(vout->evt_cbk_hdl, &evt);
 	} else {
 		*screen_width = xWindow->store_width;
 		*screen_height = xWindow->store_height;
@@ -1032,6 +1044,13 @@ GF_Err X11_SetFullScreen (struct _video_out * vout, u32 bFullScreenOn, u32 * scr
 		XUngrabKeyboard(xWindow->display, CurrentTime);
 		/*looks like this makes osmozilla crash*/
 		//if (xWindow->par_wnd) XSetInputFocus(xWindow->display, xWindow->wnd, RevertToNone, CurrentTime);
+
+		GF_Event evt;
+		memset(&evt, 0, sizeof(GF_Event));
+		evt.type = GF_EVENT_SIZE;
+		evt.size.width = xWindow->w_width;
+		evt.size.height = xWindow->w_height;
+		vout->on_event(vout->evt_cbk_hdl, &evt);
 
 		/*backbuffer resize will be done right after this is called */
 	}
@@ -1159,12 +1178,12 @@ X11_SetupWindow (GF_VideoOutput * vout)
 		break;
 	case 24:
 #ifdef GPAC_BIG_ENDIAN
-		if (xWindow->visual->red_mask==0x00FF0000)	
+		if (xWindow->visual->red_mask==0x00FF0000)
 			xWindow->pixel_format = GF_PIXEL_RGB;
 		else
 			xWindow->pixel_format = GF_PIXEL_BGR;
 #else
-		if (xWindow->visual->red_mask==0x00FF0000)	
+		if (xWindow->visual->red_mask==0x00FF0000)
 			xWindow->pixel_format = GF_PIXEL_BGR;
 		else
 			xWindow->pixel_format = GF_PIXEL_RGB;

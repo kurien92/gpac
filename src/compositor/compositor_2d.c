@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -446,7 +446,7 @@ static void store_blit_times(GF_TextureHandler *txh, u32 push_time)
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[Compositor2D] Bliting frame (CTS %d) %d ms too late\n", txh->last_frame_time, ck - txh->last_frame_time ));
 	}
 
-	GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[2D Blitter] At %u Blit texture (CTS %u) %d ms after due date - blit in %d ms - average push time %d ms\n", ck, txh->last_frame_time, ck - txh->last_frame_time, push_time, txh->upload_time / txh->nb_frames));
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPTIME, ("[2D Blitter] At %u Blit texture (CTS %u) %d ms after due date - blit in %d ms - average push time %d ms\n", ck, txh->last_frame_time, ck - txh->last_frame_time, push_time, txh->upload_time / txh->nb_frames));
 #endif
 }
 
@@ -654,22 +654,11 @@ static Bool compositor_2d_draw_bitmap_ex(GF_VisualManager *visual, GF_TextureHan
 			if (hw_caps & GF_VIDEO_HW_HAS_RGBA)
 				use_soft_stretch = GF_FALSE;
 			break;
-		case GF_PIXEL_YUV:
-		case GF_PIXEL_YVYU:
-		case GF_PIXEL_YUYV:
-		case GF_PIXEL_YUVD:
-		case GF_PIXEL_YUV422:
-		case GF_PIXEL_YUV444:
-		case GF_PIXEL_YUV444_10:
-		case GF_PIXEL_YUV422_10:
-		case GF_PIXEL_YUV_10:
-		case GF_PIXEL_NV12:
-		case GF_PIXEL_NV12_10:
-		case GF_PIXEL_NV21:
-			if (hw_caps & GF_VIDEO_HW_HAS_YUV) use_soft_stretch = GF_FALSE;
-			else if (hw_caps & GF_VIDEO_HW_HAS_YUV_OVERLAY) overlay_type = 1;
-			break;
 		default:
+			if (gf_pixel_fmt_is_yuv(txh->pixelformat)) {
+				if (hw_caps & GF_VIDEO_HW_HAS_YUV) use_soft_stretch = GF_FALSE;
+				else if (hw_caps & GF_VIDEO_HW_HAS_YUV_OVERLAY) overlay_type = 1;
+			}
 			break;
 		}
 		/*disable based on settings*/
@@ -720,6 +709,8 @@ static Bool compositor_2d_draw_bitmap_ex(GF_VisualManager *visual, GF_TextureHan
 	video_src.height = txh->height;
 	video_src.width = txh->width;
 	video_src.pitch_x = 0;
+	if (!txh->stride)
+		gf_pixel_get_size_info(txh->pixelformat, txh->width, txh->height, NULL, &txh->stride, NULL, NULL, NULL);
 	video_src.pitch_y = txh->stride;
 	video_src.pixel_format = txh->pixelformat;
 #ifdef GF_SR_USE_DEPTH
@@ -1423,11 +1414,8 @@ void visual_2d_flush_overlay_areas(GF_VisualManager *visual, GF_TraverseState *t
 					gf_irect_intersect(&ctx->bi->clip, &the_clip);
 					tr_state->ctx = ctx;
 
-					if (ctx->drawable->flags & DRAWABLE_USE_TRAVERSE_DRAW) {
-						gf_node_traverse(ctx->drawable->node, tr_state);
-					} else {
-						drawable_draw(ctx->drawable, tr_state);
-					}
+					call_drawable_draw(ctx, tr_state, GF_FALSE);
+
 					ctx->bi->clip = prev_clip;
 				}
 				ctx = ctx->next;

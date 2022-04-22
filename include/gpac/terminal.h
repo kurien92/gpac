@@ -123,7 +123,7 @@ u32 gf_term_get_time_in_ms(GF_Terminal *term);
 
 /*! gets elapsed time since loading of the scene - may be different from scene time when seeking or live content
 \param term the target terminal
-\return time ellapsed in milliseconds
+\return time elapsed in milliseconds
 */
 u32 gf_term_get_elapsed_time_in_ms(GF_Terminal *term);
 
@@ -202,13 +202,6 @@ Double gf_term_get_simulation_frame_rate(GF_Terminal *term, u32 *nb_frames_drawn
 \return error if any
 */
 GF_Err gf_term_get_visual_output_size(GF_Terminal *term, u32 *width, u32 *height);
-
-/*! process shortcuts for key events
-\param term the target terminal
-\param ev the event to process
-*/
-void gf_term_process_shortcut(GF_Terminal *term, GF_Event *ev);
-
 /*! sets playback speed
 \param term the target terminal
 \param speed the requested speed
@@ -267,7 +260,7 @@ Bool gf_term_process_step(GF_Terminal *term);
 /*! post user interaction to terminal
 \param term the target terminal
 \param event the event to post
-\return GF_TRUE if event was directly consummed
+\return GF_TRUE if event was directly consumed
 */
 Bool gf_term_user_event(GF_Terminal *term, GF_Event *event);
 
@@ -275,7 +268,7 @@ Bool gf_term_user_event(GF_Terminal *term, GF_Event *event);
 \warning NOT NEEDED WHEN THE TERMINAL IS HANDLING THE DISPLAY WINDOW (cf user.h)
 \param term the target terminal
 \param evt the event to post
-\return GF_TRUE if event was directly consummed
+\return GF_TRUE if event was directly consumed
 */
 Bool gf_term_send_event(GF_Terminal *term, GF_Event *evt);
 

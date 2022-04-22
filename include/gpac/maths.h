@@ -47,7 +47,7 @@ extern "C" {
 This section documents the math and trigo functions used in the GPAC framework. GPAC can be compiled with
  fixed-point support, representing float values on a 16.16 signed integer, which implies a developer
  must take care of float computations when using GPAC.\n
- A developper should not need to know in which mode the framework has been compiled as long as he uses
+ A developer should not need to know in which mode the framework has been compiled as long as he uses
  the math functions of GPAC which work in both float and fixed-point mode.\n
  Using fixed-point version is decided at compilation time and cannot be changed. The feature is signaled
  through the GPAC_FIXED_POINT macro: when defined, GPAC has been compiled in fixed-point mode
@@ -325,6 +325,15 @@ Tests if two rectangles are identical.
 \return 1 if rectangles are identical, 0 otherwise
 */
 Bool gf_rect_equal(GF_Rect *rc1, GF_Rect *rc2);
+
+/*!
+\brief rectangle intersection
+
+Intersects two rectangle.
+\param rc1 rectangle to use, updated to intersection result
+\param rc2 second rectangle to use
+*/
+void gf_rect_intersect(GF_Rect *rc1, GF_Rect *rc2);
 
 /*!
 \brief pixel-aligned rectangle

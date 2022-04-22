@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018
+ *			Copyright (c) Telecom ParisTech 2018-2021
  *					All rights reserved
  *
  *  This file is part of GPAC / RAW PCM reframer filter
@@ -56,7 +56,10 @@ GF_Err pcmreframe_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_re
 
 	if (is_remove) {
 		ctx->ipid = NULL;
-		gf_filter_pid_remove(ctx->opid);
+		if (ctx->opid) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
 		return GF_OK;
 	}
 	if (! gf_filter_pid_check_caps(pid))
@@ -104,6 +107,10 @@ GF_Err pcmreframe_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_re
 
 	p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_FILE_CACHED);
 	if (p && p->value.boolean) ctx->file_loaded = GF_TRUE;
+
+	if (!gf_sys_is_test_mode() ) {
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_BITRATE, & PROP_UINT(ctx->sr * ctx->Bps * ctx->ch));
+	}
 
 	p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_DOWN_SIZE);
 	if (p && p->value.longuint) {
@@ -170,6 +177,10 @@ static Bool pcmreframe_process_event(GF_Filter *filter, const GF_FilterEvent *ev
 	case GF_FEVT_STOP:
 		//don't cancel event
 		ctx->is_playing = GF_FALSE;
+		if (ctx->out_pck) {
+			gf_filter_pck_discard(ctx->out_pck);
+			ctx->out_pck = NULL;
+		}
 		return GF_FALSE;
 
 	case GF_FEVT_SET_SPEED:
@@ -213,6 +224,8 @@ GF_Err pcmreframe_process(GF_Filter *filter)
 	if (!pck) {
 		if (gf_filter_pid_is_eos(ctx->ipid) && !ctx->reverse_play) {
 			if (ctx->out_pck) {
+				gf_filter_pck_truncate(ctx->out_pck, ctx->nb_bytes_in_frame);
+				gf_filter_pck_set_duration(ctx->out_pck, ctx->nb_bytes_in_frame/ctx->Bps/ctx->ch);
 				pcmreframe_flush_packet(ctx);
 			}
 			if (ctx->opid)
@@ -280,6 +293,11 @@ GF_Err pcmreframe_process(GF_Filter *filter)
 	return GF_OK;
 }
 
+static void pcmreframe_finalize(GF_Filter *filter)
+{
+	GF_PCMReframeCtx *ctx = gf_filter_get_udta(filter);
+	if (ctx->out_pck) gf_filter_pck_discard(ctx->out_pck);
+}
 
 static GF_FilterCapability PCMReframeCaps[] =
 {
@@ -288,7 +306,7 @@ static GF_FilterCapability PCMReframeCaps[] =
 	CAP_STRING(GF_CAPS_INPUT, GF_PROP_PID_MIME, "audio/x-pcm"),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_CODECID, GF_CODECID_RAW),
-	CAP_UINT(GF_CAPS_OUTPUT_EXCLUDED, GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_BOOL(GF_CAPS_OUTPUT_EXCLUDED, GF_PROP_PID_UNFRAMED, GF_TRUE),
 };
 
 #define OFFS(_n)	#_n, offsetof(GF_PCMReframeCtx, _n)
@@ -309,6 +327,7 @@ GF_FilterRegister PCMReframeRegister = {
 	.private_size = sizeof(GF_PCMReframeCtx),
 	.args = PCMReframeArgs,
 	SETCAPS(PCMReframeCaps),
+	.finalize = pcmreframe_finalize,
 	.configure_pid = pcmreframe_configure_pid,
 	.process = pcmreframe_process,
 	.process_event = pcmreframe_process_event

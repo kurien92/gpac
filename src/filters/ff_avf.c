@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom Paris 2019
+ *			Copyright (c) Telecom Paris 2019-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / ffmpeg avfilter filter
@@ -46,6 +46,7 @@ typedef struct
 	AVFilterContext *io_filter_ctx;
 	GF_FilterPid *io_pid;
 	u32 timescale, pfmt, width, height, sr, nb_ch, bps;
+	Bool planar;
 	u64 ch_layout;
 	GF_Fraction sar;
 	u32 stride, stride_uv, nb_planes;
@@ -66,16 +67,13 @@ typedef struct
 	GF_List *ipids;
 	GF_List *opids;
 
-	//decode options
-	AVDictionary *options;
-
 	AVFilterGraph *filter_graph;
 	char *filter_desc;
 
 	GF_FilterCapability filter_caps[7];
 	//0: not loaded, 1: graph config requested but graph not loaded, 2: graph loaded
 	u32 configure_state;
-	u32 nb_v_out, nb_a_out;
+	u32 nb_v_out, nb_a_out, nb_inputs;
 
 	AVFilterInOut *outputs;
 	AVFrame *frame;
@@ -172,12 +170,12 @@ static GF_Err ffavf_setup_outputs(GF_Filter *filter, GF_FFAVFilterCtx *ctx)
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_WIDTH, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_HEIGHT, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_PIXFMT, NULL);
+				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_FPS, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_STRIDE, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_STRIDE_UV, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_SAR, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_COLR_MX, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_COLR_RANGE, NULL);
-				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_COLR_SPACE, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_COLR_TRANSFER, NULL);
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_COLR_PRIMARIES, NULL);
 			}
@@ -205,7 +203,7 @@ static GF_Err ffavf_setup_outputs(GF_Filter *filter, GF_FFAVFilterCtx *ctx)
 		}
 		if (opid->is_video) {
 			if (ctx->pfmt) {
-				enum AVPixelFormat pfmt = ffmpeg_pixfmt_from_gpac(ctx->pfmt);
+				enum AVPixelFormat pfmt = ffmpeg_pixfmt_from_gpac(ctx->pfmt, GF_FALSE);
 				ret = av_opt_set_bin(opid->io_filter_ctx, "pix_fmts", (uint8_t*)&pfmt, sizeof(pfmt), AV_OPT_SEARCH_CHILDREN);
 				if (ret < 0) {
 					GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[FFAVF] Fail to set %s pixel format: %s\n", avf->name, av_err2str(ret) ));
@@ -286,6 +284,7 @@ static GF_Err ffavf_initialize(GF_Filter *filter)
 	ctx->opids = gf_list_new();
 	ctx->frame = av_frame_alloc();
 
+	ffmpeg_setup_logs(GF_LOG_MEDIA);
 
 	ctx->filter_graph = avfilter_graph_alloc();
 	ret = avfilter_graph_parse2(ctx->filter_graph, ctx->filter_desc, &inputs, &outputs);
@@ -294,19 +293,20 @@ static GF_Err ffavf_initialize(GF_Filter *filter)
 		return GF_BAD_PARAM;
 	}
 
+	ctx->nb_inputs=0;
 	io = inputs;
 	while (io) {
 		if (io->filter_ctx->filter->flags & AVFILTER_FLAG_DYNAMIC_INPUTS)
 			dyn_inputs = GF_TRUE;
-		for (i=0; i<io->filter_ctx->nb_inputs; i++) {
-			enum AVMediaType mt = avfilter_pad_get_type(io->filter_ctx->input_pads, i);
-			u32 streamtype = ffmpeg_stream_type_to_gpac(mt);
 
-			switch (streamtype) {
-			case GF_STREAM_VISUAL: nb_v_in++; break;
-			case GF_STREAM_AUDIO: nb_a_in++; break;
-			}
+		enum AVMediaType mt = avfilter_pad_get_type(io->filter_ctx->input_pads, io->pad_idx);
+		u32 streamtype = ffmpeg_stream_type_to_gpac(mt);
+
+		switch (streamtype) {
+		case GF_STREAM_VISUAL: nb_v_in++; break;
+		case GF_STREAM_AUDIO: nb_a_in++; break;
 		}
+		ctx->nb_inputs++;
 		io = io->next;
 	}
 
@@ -461,6 +461,10 @@ static GF_Err ffavf_process(GF_Filter *filter)
 
 	//graph needs to be loaded
 	if (ctx->configure_state==1) {
+		if (gf_filter_connections_pending(filter))
+			return GF_OK;
+		if (ctx->nb_inputs > gf_list_count(ctx->ipids))
+			return GF_OK;
 		return ffavf_setup_filter(filter, ctx);
 	}
 
@@ -545,6 +549,12 @@ static GF_Err ffavf_process(GF_Filter *filter)
 				ctx->frame->sample_rate = ipid->sr;
 				ctx->frame->format = ipid->pfmt;
 				ctx->frame->nb_samples = data_size / ipid->nb_ch / ipid->bps;
+				if (ipid->planar) {
+					u32 ch_idx;
+					for (ch_idx=0; ch_idx<ipid->nb_ch; ch_idx++) {
+						ctx->frame->extended_data[ch_idx] = (uint8_t *) data + ctx->frame->nb_samples*ipid->bps*ch_idx;
+					}
+				}
 			}
 			/* push the decoded frame into the filtergraph */
 			ret = av_buffersrc_add_frame_flags(ipid->io_filter_ctx, ctx->frame, 0);
@@ -606,7 +616,12 @@ static GF_Err ffavf_process(GF_Filter *filter)
 			if (update_props) {
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_WIDTH, &PROP_UINT(frame->width));
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_HEIGHT, &PROP_UINT(frame->height));
-				opid->gf_pfmt = ffmpeg_pixfmt_to_gpac(frame->format);
+				opid->gf_pfmt = ffmpeg_pixfmt_to_gpac(frame->format, GF_FALSE);
+				if (ffmpeg_pixfmt_is_fullrange(frame->format)) {
+					gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_COLR_RANGE, &PROP_BOOL(GF_TRUE));
+				} else {
+					gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_COLR_RANGE, NULL);
+				}
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_PIXFMT, &PROP_UINT(opid->gf_pfmt));
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_STRIDE, &PROP_UINT(frame->linesize[0]));
 				if (frame->linesize[1])
@@ -615,6 +630,7 @@ static GF_Err ffavf_process(GF_Filter *filter)
 					gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_STRIDE_UV, NULL);
 
 				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_TIMESCALE, &PROP_UINT(opid->io_filter_ctx->inputs[0]->time_base.den) );
+				gf_filter_pid_set_property(opid->io_pid, GF_PROP_PID_FPS, &PROP_FRAC_INT(opid->io_filter_ctx->inputs[0]->time_base.den, opid->io_filter_ctx->inputs[0]->time_base.num) );
 
 				opid->width = frame->width;
 				opid->height = frame->height;
@@ -638,7 +654,7 @@ static GF_Err ffavf_process(GF_Filter *filter)
 			if (!pck) return GF_OUT_OF_MEM;
 
 			for (j=0; j<opid->height; j++) {
-				memcpy(buffer + j*opid->stride, frame->data[0] + j*frame->linesize[0], opid->stride);
+				memcpy(buffer + j*opid->stride, frame->data[0] + j*frame->linesize[0], opid->width);
 			}
 			if (frame->linesize[1]) {
 				buffer += opid->height*opid->stride;
@@ -650,6 +666,12 @@ static GF_Err ffavf_process(GF_Filter *filter)
 				buffer += opid->uv_height*opid->stride_uv;
 				for (j=0; j<opid->uv_height; j++) {
 					memcpy(buffer + j*opid->stride_uv, frame->data[2] + j*frame->linesize[2], opid->uv_width);
+				}
+			}
+			if (frame->linesize[3]) {
+				buffer += opid->uv_height*opid->stride_uv;
+				for (j=0; j<opid->height; j++) {
+					memcpy(buffer + j*opid->stride, frame->data[3] + j*frame->linesize[3], opid->width);
 				}
 			}
 			if (frame->interlaced_frame)
@@ -764,10 +786,10 @@ static GF_Err ffavf_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_PIXFMT);
 		if (!p) return GF_OK; //not ready yet
 		gf_pfmt = p->value.uint;
-		pix_fmt = ffmpeg_pixfmt_from_gpac(gf_pfmt);
+		pix_fmt = ffmpeg_pixfmt_from_gpac(gf_pfmt, GF_FALSE);
 
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_SAR);
-		if (p) sar = p->value.frac;
+		if (p && p->value.frac.num && p->value.frac.den) sar = p->value.frac;
 
 		pid_ctx->stride = pid_ctx->stride_uv = 0;
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_STRIDE);
@@ -811,6 +833,7 @@ static GF_Err ffavf_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 		if (!p) return GF_OK; //not ready yet
 		afmt = ffmpeg_audio_fmt_from_gpac(p->value.uint);
 		pid_ctx->bps = gf_audio_fmt_bit_depth(p->value.uint) / 8;
+		pid_ctx->planar = gf_audio_fmt_is_planar(p->value.uint);
 
 		if (check_recfg) {
 			if (sr!=pid_ctx->sr) {}
@@ -864,21 +887,18 @@ static void ffavf_finalize(GF_Filter *filter)
 	ffavf_reset_graph(ctx);
 	while (gf_list_count(ctx->ipids)) {
 		GF_FFAVPid *ipid = gf_list_pop_back(ctx->ipids);
-		//io_filter_ctx is destroyed while reseting the graph
+		//io_filter_ctx is destroyed while resetting the graph
 		gf_free(ipid);
 	}
 	gf_list_del(ctx->ipids);
 	while (gf_list_count(ctx->opids)) {
 		GF_FFAVPid *opid = gf_list_pop_back(ctx->opids);
-		//io_filter_ctx is destroyed while reseting the graph
+		//io_filter_ctx is destroyed while resetting the graph
 		gf_free(opid);
 	}
 	gf_list_del(ctx->opids);
 	if (ctx->filter_desc) gf_free(ctx->filter_desc);
 	if (ctx->frame) av_frame_free(&ctx->frame);
-
-	if (ctx->options) av_dict_free(&ctx->options);
-	return;
 }
 
 static GF_Err ffavf_update_arg(GF_Filter *filter, const char *arg_name, const GF_PropertyValue *arg_val)
@@ -931,13 +951,12 @@ static GF_Err ffavf_update_arg(GF_Filter *filter, const char *arg_name, const GF
 		ret = avfilter_graph_send_command(ctx->filter_graph, szTargetName, arg, arg_value, szCommandRes, 1024, 0);
 		if (ret<0) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[FFAVF] Failed to execute command %s: %s\n", arg_name, av_err2str(ret) ));
+			return GF_BAD_PARAM;
 		}
+		return GF_OK;
 	}
-	ret = av_dict_set(&ctx->options, arg_name, arg_val->value.string, 0);
-	if (ret<0) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[FFAVF] Failed to set option %s:%s\n", arg_name, arg_val ));
-	}
-	return GF_OK;
+	//other options are not allowed, they MUST be passed as part of `f` option
+	return GF_NOT_FOUND;
 }
 
 
@@ -954,7 +973,9 @@ GF_FilterRegister FFAVFilterRegister = {
 	.name = "ffavf",
 	.version = LIBAVFORMAT_IDENT,
 	GF_FS_SET_DESCRIPTION("FFMPEG AVFilter")
-	GF_FS_SET_HELP("This filter provides libavfilter raw audio and video tools. See FFMPEG documentation (https://ffmpeg.org/documentation.html) for more details\n"
+	GF_FS_SET_HELP("This filter provides libavfilter raw audio and video tools.\n"
+		"See FFMPEG documentation (https://ffmpeg.org/documentation.html) for more details\n"
+		"To list all supported avfilters for your GPAC build, use `gpac -h ffavf:*`.\n"
 		"\n"
 		"# Declaring a filter\n"
 		"The filter loads a filter or a filter chain description from the [-f]() option.\n"
@@ -970,17 +991,17 @@ GF_FilterRegister FFAVFilterRegister = {
 		"For simple filter graphs with only one input and one output, the input PID is assigned the avfilter name `in` and the output PID is assigned the avfilter name `out`\n"
 		"\n"
 		"When a graph has several inputs, input PID names shall be assigned by the user using the `ffid` property, and mapping must be done in the filter.\n"
-		"EX src=video:#ffid=a src=logo:#ffid=b ffavf::f=[a][b]overlay=main_w-overlay_w-10:main_h-overlay_h-10\n"
+		"EX gpac -i video:#ffid=a -i logo:#ffid=b ffavf::f=[a][b]overlay=main_w-overlay_w-10:main_h-overlay_h-10 vout\n"
 		"In this example:\n"
 		"- the video source is identified as `a`\n"
 		"- the logo source is identified as `b`\n"
 		"- the filter declaration maps `a` to its first input (in this case, main video) and `b` to its second input (in this case the overlay)\n"
 	   "\n"
 		"When a graph has several outputs, output PIDs will be identified using the `ffid` property set to the output avfilter name.\n"
-		"EX src=source ffavf::f=split inspect:SID=#ffid=out0 vout#SID=out1\n"
+		"EX gpac -i source ffavf::f=split inspect:SID=#ffid=out0 vout#SID=out1\n"
 		"In this example:\n"
-		"- the spliter produces 2 video streams `out0` and `out1`\n"
-		"- the inspecter only process stream with ffid `out0`\n"
+		"- the splitter produces 2 video streams `out0` and `out1`\n"
+		"- the inspector only process stream with ffid `out0`\n"
 		"- the video output only displays stream with ffid `out1`\n"
 		"\n"
 		"The name(s) of the final output of the avfilter graph cannot be configured in GPAC. You can however name intermediate output(s) in a complex filter chain as usual.\n"
@@ -991,7 +1012,7 @@ GF_FilterRegister FFAVFilterRegister = {
 		"- name#com_name=value: sends command `com_name` with value `value` to filter named `name`\n"
 		"\n"
 	)
-	.flags =  GF_FS_REG_META | GF_FS_REG_EXPLICIT_ONLY,
+	.flags =  GF_FS_REG_META | GF_FS_REG_EXPLICIT_ONLY | GF_FS_REG_ALLOW_CYCLIC,
 	.private_size = sizeof(GF_FFAVFilterCtx),
 	SETCAPS(FFAVFilterCaps),
 	.initialize = ffavf_initialize,
@@ -1005,13 +1026,13 @@ GF_FilterRegister FFAVFilterRegister = {
 
 static const GF_FilterArgs FFAVFilterArgs[] =
 {
-	{ "f", -1, "filter or filter chain description - see filter help", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_META},
+	{ "f", -1, "filter or filter chain description", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_META},
 	{ OFFS(pfmt), "pixel format of output. If not set, let AVFilter decide", GF_PROP_PIXFMT, "none", NULL, 0},
 	{ OFFS(afmt), "audio format of output. If not set, let AVFilter decide", GF_PROP_PCMFMT, "none", NULL, 0},
 	{ OFFS(sr), "sample rate of output. If not set, let AVFilter decide", GF_PROP_UINT, "0", NULL, 0},
 	{ OFFS(ch), "number of channels of output. If not set, let AVFilter decide", GF_PROP_UINT, "0", NULL, 0},
-	{ OFFS(dump), "dump graph as log madia@info or stderr if not set", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_UPDATE},
-	{ "*", -1, "any possible options defined for AVFilter and sub-classes. See `gpac -hx ffavf` and `gpac -hx ffavf:*`", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_META},
+	{ OFFS(dump), "dump graph as log media@info or stderr if not set", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_UPDATE},
+	{ "*", -1, "any possible options defined for AVFilter and sub-classes (see `gpac -hx ffavf` and `gpac -hx ffavf:*`)", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_META},
 	{0}
 };
 

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2018
+ *			Copyright (c) Telecom ParisTech 2017-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / generic stream to file filter
@@ -26,8 +26,12 @@
 #include <gpac/filters.h>
 #include <gpac/constants.h>
 #include <gpac/bitstream.h>
+#include <gpac/xml.h>
+#include <gpac/base_coding.h>
 
 #include <gpac/internal/isomedia_dev.h>
+
+#ifndef GPAC_DISABLE_CORE_TOOLS
 
 enum
 {
@@ -40,7 +44,7 @@ enum
 typedef struct
 {
 	//opts
-	Bool exporter, frame, split;
+	Bool exporter, frame, split, merge_region;
 	u32 sstart, send;
 	u32 pfmt, afmt, decinfo;
 	GF_Fraction dur;
@@ -65,12 +69,25 @@ typedef struct
 
 	u32 target_pfmt, target_afmt;
 	Bool is_bmp;
+	u32 is_y4m;
 	u32 is_wav;
 	u32 w, h, stride;
 	u64 nb_bytes;
 	Bool dash_mode;
+	Bool trunc_audio;
+	Bool webvtt;
 
 	u64 first_dts_plus_one;
+
+	Bool ttml_agg;
+	GF_XMLNode *ttml_root;
+
+	GF_FilterPacket *ttml_dash_pck;
+
+	Bool dump_srt;
+	Bool need_ttxt_footer;
+	u8 *write_buf;
+	u32 write_alloc;
 } GF_GenDumpCtx;
 
 
@@ -84,12 +101,21 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 
 	if (is_remove) {
 		ctx->ipid = NULL;
-		gf_filter_pid_remove(ctx->opid);
-		ctx->opid = NULL;
+		if (ctx->opid) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
 		return GF_OK;
 	}
-	if (! gf_filter_pid_check_caps(pid))
-		return GF_NOT_SUPPORTED;
+	if (! gf_filter_pid_check_caps(pid)) {
+		p = ctx->frame ? gf_filter_pid_get_property(pid, GF_PROP_PID_UNFRAMED) : NULL;
+		if (p && p->value.boolean) {
+			GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("Option frame specified as inherited and writegen loaded dynamically, input data will be unframed ! Use `writegen:frame -o dst` for raw frame dump\n", szExt));
+
+		} else {
+			return GF_NOT_SUPPORTED;
+		}
+	}
 
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_CODECID);
 	if (!p) return GF_NOT_SUPPORTED;
@@ -129,11 +155,25 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 	pf = p ? p->value.uint : 0;
 	if (!pf) pf = GF_PIXEL_YUV;
 
-	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DECODER_CONFIG);
-	if (p) {
-		ctx->dcfg = p->value.data.ptr;
-		ctx->dcfg_size = p->value.data.size;
+	//get DSI except for unframed streams
+	Bool get_dsi = GF_FALSE;
+	p = gf_filter_pid_get_property(pid, GF_PROP_PID_UNFRAMED);
+	if (!p ) p = gf_filter_pid_get_property(pid, GF_PROP_PID_UNFRAMED_LATM);
+	if (!p || !p->value.boolean) {
+		get_dsi = GF_TRUE;
 	}
+	//we need this one for tx3g and webvtt
+	if ((cid==GF_CODECID_TX3G) || (cid==GF_CODECID_WEBVTT))
+		get_dsi = GF_TRUE;
+
+	if (get_dsi) {
+		p = gf_filter_pid_get_property(pid, GF_PROP_PID_DECODER_CONFIG);
+		if (p) {
+			ctx->dcfg = p->value.data.ptr;
+			ctx->dcfg_size = p->value.data.size;
+		}
+	}
+
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DASH_MODE);
 	ctx->dash_mode = (p && p->value.uint) ? GF_TRUE : GF_FALSE;
 
@@ -152,6 +192,16 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 		if (sep) sep[0] = 0;
 		break;
 	}
+
+	ctx->dump_srt = GF_FALSE;
+	p = gf_filter_pid_caps_query(ctx->opid, GF_PROP_PID_FILE_EXT);
+	if (p && p->value.string) {
+		if (!strcmp(p->value.string, "srt")) {
+			ctx->dump_srt = GF_TRUE;
+			strcpy(szCodecExt, "srt");
+		}
+	}
+
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_FILE_EXT, &PROP_STRING(szCodecExt) );
 
 	mimetype = gf_codecid_mime(cid);
@@ -161,6 +211,7 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 	case GF_CODECID_AAC_MPEG2_MP:
 	case GF_CODECID_AAC_MPEG2_LCP:
 	case GF_CODECID_AAC_MPEG2_SSRP:
+		//override extension to latm for aac if unframed latm data - NOT for usac
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_UNFRAMED_LATM);
 		if (p && p->value.boolean) {
 			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_FILE_EXT, &PROP_STRING("latm") );
@@ -211,6 +262,17 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_MIME, &PROP_STRING(mimetype) );
 		if (ctx->decinfo == DECINFO_AUTO)
 			ctx->decinfo = DECINFO_FIRST;
+
+		p = gf_filter_pid_get_property(pid, GF_PROP_PID_UNFRAMED);
+		if (p && p->value.boolean)
+			ctx->dump_srt = GF_TRUE;
+		break;
+
+	case GF_CODECID_TX3G:
+		if (!gf_filter_pid_get_property(pid, GF_PROP_PID_MIME))
+			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_MIME, &PROP_STRING(mimetype) );
+		if (ctx->decinfo == DECINFO_AUTO)
+			ctx->decinfo = DECINFO_FIRST;
 		break;
 	case GF_CODECID_META_TEXT_AMF:
 	case GF_CODECID_META_TEXT:
@@ -231,15 +293,25 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 		if (ctx->decinfo == DECINFO_AUTO)
 			ctx->decinfo = DECINFO_FIRST;
 		break;
+	case GF_CODECID_WEBVTT:
+		if (!gf_filter_pid_get_property(pid, GF_PROP_PID_MIME))
+			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_MIME, &PROP_STRING(mimetype) );
+		if (ctx->decinfo == DECINFO_AUTO)
+			ctx->decinfo = DECINFO_FIRST;
+		ctx->webvtt = GF_TRUE;
+		break;
 	case GF_CODECID_SUBS_XML:
 		if (!gf_filter_pid_get_property(pid, GF_PROP_PID_MIME))
 			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_MIME, &PROP_STRING(mimetype) );
 
-		if (!ctx->frame) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_AUTHOR, ("Subtitles re-assembling is not supported yet\n"));
-			return GF_NOT_SUPPORTED;
+		if (ctx->dash_mode) {
+			ctx->ttml_agg = GF_TRUE;
 		}
-		ctx->split = GF_TRUE;
+		else if (!ctx->frame && !ctx->split) {
+			ctx->ttml_agg = GF_TRUE;
+		} else {
+			ctx->split = GF_TRUE;
+		}
 		if (ctx->decinfo == DECINFO_AUTO)
 			ctx->decinfo = DECINFO_FIRST;
 		break;
@@ -273,10 +345,13 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 					//request BGR
 					ctx->target_pfmt = GF_PIXEL_BGR;
 					ctx->split = GF_TRUE;
+				} else if (!strcmp(szExt, "y4m")) {
+					ctx->is_y4m = GF_TRUE;
+					ctx->target_pfmt = GF_PIXEL_YUV;
 				} else {
 					ctx->target_pfmt = gf_pixel_fmt_parse(szExt);
 					if (!ctx->target_pfmt) {
-						GF_LOG(GF_LOG_ERROR, GF_LOG_AUTHOR, ("Cannot guess pixel format from extension type %s\n", szExt));
+						GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("Cannot guess pixel format from extension type %s\n", szExt));
 						return GF_NOT_SUPPORTED;
 					}
 					strcpy(szExt, gf_pixel_fmt_sname(ctx->target_pfmt));
@@ -303,11 +378,11 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 			ctx->stride = p ? p->value.uint : 0;
 
 			if (!ctx->stride) {
-				gf_pixel_get_size_info(ctx->target_pfmt, ctx->w, ctx->h, NULL, &ctx->stride, NULL, NULL, NULL);
+				gf_pixel_get_size_info(ctx->target_pfmt ? ctx->target_pfmt : pf, ctx->w, ctx->h, NULL, &ctx->stride, NULL, NULL, NULL);
 			}
 
 		} else if (stype==GF_STREAM_AUDIO) {
-			strcpy(szExt, gf_audio_fmt_sname(ctx->target_pfmt ? ctx->target_afmt : sfmt));
+			strcpy(szExt, gf_audio_fmt_sname(ctx->target_afmt ? ctx->target_afmt : sfmt));
 			p = gf_filter_pid_caps_query(ctx->opid, GF_PROP_PID_FILE_EXT);
 			if (p) {
 				strncpy(szExt, p->value.string, GF_4CC_MSIZE-1);
@@ -337,12 +412,15 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 					//make sure we reconfigure
 					ctx->codecid = 0;
 				}
+				if (ctx->dur.num && ctx->dur.den && !gf_audio_fmt_is_planar(ctx->target_afmt ? ctx->target_afmt : ctx->afmt))
+					ctx->trunc_audio = GF_TRUE;
 			}
 
 		} else {
 			strcpy(szExt, gf_4cc_to_str(cid));
 		}
 		if (ctx->is_bmp) strcpy(szExt, "bmp");
+		else if (ctx->is_y4m) strcpy(szExt, "y4m");
 		else if (ctx->is_wav) {
 			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DISABLE_PROGRESSIVE, &PROP_UINT(GF_PID_FILE_PATCH_REPLACE) );
 			strcpy(szExt, "wav");
@@ -372,18 +450,18 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 	if (ctx->exporter) {
 		if (w && h) {
 			if (cid==GF_CODECID_RAW) name = gf_pixel_fmt_name(pf);
-			GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("Exporting %s - Size %dx%d\n", name, w, h));
+			GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("Exporting %s - Size %dx%d\n", name, w, h));
 		} else if (sr && chan) {
 			if (cid==GF_CODECID_RAW) {
-				GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("Exporting PCM %s SampleRate %d %d channels %d bits per sample\n", gf_audio_fmt_name(sfmt), sr, chan, gf_audio_fmt_bit_depth(sfmt) ));
+				GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("Exporting PCM %s SampleRate %d %d channels %d bits per sample\n", gf_audio_fmt_name(sfmt), sr, chan, gf_audio_fmt_bit_depth(sfmt) ));
 			} else {
 				if (!nb_bps)
 					nb_bps = gf_audio_fmt_bit_depth(sfmt);
 
-				GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("Exporting %s - SampleRate %d %d channels %d bits per sample\n", name, sr, chan, nb_bps ));
+				GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("Exporting %s - SampleRate %d %d channels %d bits per sample\n", name, sr, chan, nb_bps ));
 			}
 		} else {
-			GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("Exporting %s\n", name));
+			GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("Exporting %s\n", name));
 		}
 	}
 
@@ -399,7 +477,7 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 	}
 
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DURATION);
-	if (p) ctx->duration = p->value.lfrac;
+	if (p && (p->value.lfrac.num>0)) ctx->duration = p->value.lfrac;
 
 	gf_filter_pid_set_framing_mode(pid, GF_TRUE);
 	return GF_OK;
@@ -418,12 +496,13 @@ static GF_FilterPacket *writegen_write_j2k(GF_GenDumpCtx *ctx, char *data, u32 d
 	sig[6] = sig[7] = ' ';
 
 	if ((data_size>16) && !memcmp(data, sig, 8)) {
-		return gf_filter_pck_new_ref(ctx->opid, NULL, 0, in_pck);
+		return gf_filter_pck_new_ref(ctx->opid, 0, 0, in_pck);
 	}
 
 	size = data_size + 8*4 /*jP%20%20 + ftyp*/ + ctx->dcfg_size + 8;
 
 	dst_pck = gf_filter_pck_new_alloc(ctx->opid, size, &output);
+	if (!dst_pck) return NULL;
 
 
 	if (!ctx->bs) ctx->bs = gf_bs_new(output, size, GF_BITSTREAM_WRITE);
@@ -490,6 +569,7 @@ static GF_FilterPacket *writegen_write_bmp(GF_GenDumpCtx *ctx, char *data, u32 d
 
 	size = ctx->w*ctx->h*3 + 54; //14 + 40 = size of BMP file header and BMP file info;
 	dst_pck = gf_filter_pck_new_alloc(ctx->opid, size, &output);
+	if (!dst_pck) return NULL;
 
 	memset(&fh, 0, sizeof(fh));
 	fh.bfType = 19778;
@@ -553,6 +633,7 @@ static void writegen_write_wav_header(GF_GenDumpCtx *ctx)
 
 	size = 44;
 	dst_pck = gf_filter_pck_new_alloc(ctx->opid, size, &output);
+	if (!dst_pck) return;
 
 	if (!ctx->bs) ctx->bs = gf_bs_new(output, size, GF_BITSTREAM_WRITE);
 	else gf_bs_reassign_buffer(ctx->bs, output, size);
@@ -579,10 +660,426 @@ static void writegen_write_wav_header(GF_GenDumpCtx *ctx)
 	gf_filter_pck_send(dst_pck);
 }
 
+
+GF_XMLAttribute *ttml_get_attr(GF_XMLNode *node, char *name)
+{
+	u32 i=0;
+	GF_XMLAttribute *att;
+	while (node && (att = gf_list_enum(node->attributes, &i)) ) {
+		if (!strcmp(att->name, name)) return att;
+	}
+	return NULL;
+}
+static GF_XMLNode *ttml_locate_div(GF_XMLNode *body, const char *region_name, u32 div_idx)
+{
+	u32 i=0, loc_div_idx=0;
+	GF_XMLNode *div;
+	while ( (div = gf_list_enum(body->content, &i)) ) {
+		if (div->type) continue;
+		if (strcmp(div->name, "div")) continue;
+
+		if (!region_name) {
+			if (div_idx==loc_div_idx) return div;
+			loc_div_idx++;
+		} else {
+			GF_XMLAttribute *att = ttml_get_attr(div, "region");
+			if (att && att->value && !strcmp(att->value, region_name))
+				return div;
+		}
+	}
+	if (region_name) {
+		return ttml_locate_div(body, NULL, div_idx);
+	}
+	return NULL;
+}
+
+GF_XMLNode *ttml_get_body(GF_XMLNode *root)
+{
+	u32 i=0;
+	GF_XMLNode *child;
+	while (root && (child = gf_list_enum(root->content, &i)) ) {
+		if (child->type) continue;
+		if (!strcmp(child->name, "body")) return child;
+	}
+	return NULL;
+}
+
+static Bool ttml_same_attr(GF_XMLNode *n1, GF_XMLNode *n2)
+{
+	u32 i=0;
+	GF_XMLAttribute *att1;
+	while ( (att1 = gf_list_enum(n1->attributes, &i))) {
+		Bool found = GF_FALSE;
+		u32 j=0;
+		GF_XMLAttribute *att2;
+		while ( (att2 = gf_list_enum(n2->attributes, &j))) {
+			if (!strcmp(att1->name, att2->name) && !strcmp(att1->value, att2->value)) {
+				found = GF_TRUE;
+				break;
+			}
+		}
+		if (!found) return GF_FALSE;
+	}
+	return GF_TRUE;
+}
+
+static GF_Err ttml_embed_data(GF_XMLNode *node, u8 *aux_data, u32 aux_data_size, u8 *subs_data, u32 subs_data_size)
+{
+	u32 i=0;
+	GF_XMLNode *child;
+	u32 subs_idx=0;
+	GF_XMLAttribute *att;
+	Bool is_source = GF_FALSE;
+	Bool has_src_att = GF_FALSE;
+	if (!node || node->type) return GF_BAD_PARAM;
+
+	if (!strcmp(node->name, "source")) {
+		is_source = GF_TRUE;
+	}
+
+	while ((att = gf_list_enum(node->attributes, &i))) {
+		char *sep, *fext;
+		if (strcmp(att->name, "src")) continue;
+		has_src_att = GF_TRUE;
+		if (strncmp(att->value, "urn:", 4)) continue;
+		sep = strrchr(att->value, ':');
+		if (!sep) continue;
+		sep++;
+		fext = gf_file_ext_start(sep);
+		if (fext) fext[0] = 0;
+		subs_idx = atoi(sep);
+		if (fext) fext[0] = '.';
+		if (!subs_idx || ((subs_idx-1) * 14 > subs_data_size)) {
+			subs_idx = 0;
+			continue;
+		}
+		break;
+	}
+	if (subs_idx) {
+		GF_XMLNode *data;
+		u32 subs_offset = 0;
+		u32 subs_size = 0;
+		u32 idx = 1;
+		//fetch subsample info
+		for (i=0; i<subs_data_size; i+=14) {
+			u32 a_subs_size = subs_data[i+4];
+			a_subs_size <<= 8;
+			a_subs_size |= subs_data[i+5];
+			a_subs_size <<= 8;
+			a_subs_size |= subs_data[i+6];
+			a_subs_size <<= 8;
+			a_subs_size |= subs_data[i+7];
+			if (idx==subs_idx) {
+				subs_size = a_subs_size;
+				break;
+			}
+			subs_offset += a_subs_size;
+			idx++;
+		}
+		if (!subs_size || (subs_offset + subs_size > aux_data_size)) {
+			if (!subs_size) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("No subsample with index %u in sample\n", subs_idx));
+			} else {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("Corrupted subsample %u info, size %u offset %u but sample size %u\n", subs_idx, subs_size, subs_offset, aux_data_size));
+			}
+			return GF_NON_COMPLIANT_BITSTREAM;
+		}
+
+		//remove src attribute
+		gf_list_del_item(node->attributes, att);
+		if (att->name) gf_free(att->name);
+		if (att->value) gf_free(att->value);
+		gf_free(att);
+
+		//create a source node
+		if (!is_source) {
+			GF_XMLNode *s;
+			GF_SAFEALLOC(s, GF_XMLNode);
+			if (!s) return GF_OUT_OF_MEM;
+			s->attributes = gf_list_new();
+			s->content = gf_list_new();
+			s->name = gf_strdup("source");
+			gf_list_add(node->content, s);
+			if (!s->name || !s->content || !s->attributes) return GF_OUT_OF_MEM;
+			//move @type to source
+			att = ttml_get_attr(node, "type");
+			if (att) {
+				gf_list_del_item(node->attributes, att);
+				gf_list_add(s->attributes, att);
+			}
+			node = s;
+		}
+
+		//create a data node
+		GF_SAFEALLOC(data, GF_XMLNode);
+		if (!data) return GF_OUT_OF_MEM;
+		data->attributes = gf_list_new();
+		data->content = gf_list_new();
+		data->name = gf_strdup("data");
+		gf_list_add(node->content, data);
+		if (!data->name || !data->content || !data->attributes) return GF_OUT_OF_MEM;
+		//move @type to data
+		att = ttml_get_attr(node, "type");
+		if (att) {
+			gf_list_del_item(node->attributes, att);
+			gf_list_add(data->attributes, att);
+		}
+		//base64 encode in a child
+		GF_SAFEALLOC(node, GF_XMLNode)
+		if (!node) return GF_OUT_OF_MEM;
+		node->type = GF_XML_TEXT_TYPE;
+		u32 size_64 = (subs_size * 2) + 3;
+		node->name = gf_malloc(sizeof(char) * size_64);
+		if (!node->name) {
+			gf_free(node);
+			return GF_OUT_OF_MEM;
+		}
+		subs_size = gf_base64_encode(aux_data + subs_offset, subs_size, (u8*) node->name, size_64);
+		node->name[subs_size] = 0;
+		return gf_list_add(data->content, node);
+	}
+	//src was present but not an embedded data, do not recurse
+	if (has_src_att) return GF_OK;
+
+	i=0;
+	while ((child = gf_list_enum(node->content, &i))) {
+		if (child->type) continue;
+		ttml_embed_data(child, aux_data, aux_data_size, subs_data, subs_data_size);
+	}
+	return GF_OK;
+}
+
+static GF_Err writegen_push_ttml(GF_GenDumpCtx *ctx, char *data, u32 data_size, GF_FilterPacket *in_pck)
+{
+	const GF_PropertyValue *subs = gf_filter_pck_get_property(in_pck, GF_PROP_PCK_SUBS);
+	char *ttml_text = NULL;
+	GF_Err e = GF_OK;
+	u32 ttml_text_size;
+	GF_DOMParser *dom;
+	u32 txt_size, nb_children;
+	u32 i, k, div_idx;
+	GF_XMLNode *root_pck, *p_global, *p_pck, *body_pck, *body_global;
+
+	if (subs) {
+		if (subs->value.data.size < 14)
+			return GF_NON_COMPLIANT_BITSTREAM;
+		txt_size = subs->value.data.ptr[4];
+		txt_size <<= 8;
+		txt_size |= subs->value.data.ptr[5];
+		txt_size <<= 8;
+		txt_size |= subs->value.data.ptr[6];
+		txt_size <<= 8;
+		txt_size |= subs->value.data.ptr[7];
+		if (txt_size>data_size)
+			return GF_NON_COMPLIANT_BITSTREAM;
+	} else {
+		txt_size = data_size;
+	}
+	ttml_text_size = txt_size + 2;
+	ttml_text = gf_malloc(sizeof(char) * ttml_text_size);
+	if (!ttml_text) return GF_OUT_OF_MEM;
+
+	memcpy(ttml_text, data, txt_size);
+	ttml_text[txt_size] = 0;
+	ttml_text[txt_size+1] = 0;
+
+	dom = gf_xml_dom_new();
+	if (!dom) return GF_OUT_OF_MEM;
+	e = gf_xml_dom_parse_string(dom, ttml_text);
+	if (e) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[XML] Invalid TTML doc: %s\n\tXML text was:\n%s", gf_xml_dom_get_error(dom), ttml_text));
+		goto exit;
+	}
+	root_pck = gf_xml_dom_get_root(dom);
+
+	//subsamples, replace all data embedded as subsample with base64 encoding
+	if (subs && root_pck) {
+		e = ttml_embed_data(root_pck, data+txt_size, data_size-txt_size, subs->value.data.ptr+14, subs->value.data.size-14);
+		if (e) goto exit;
+	}
+
+	if (!ctx->ttml_root) {
+		ctx->ttml_root = gf_xml_dom_detach_root(dom);
+		goto exit;
+	}
+
+
+	body_pck = ttml_get_body(root_pck);
+	body_global = ttml_get_body(ctx->ttml_root);
+	div_idx = 0;
+	nb_children = body_pck ? gf_list_count(body_pck->content) : 0;
+	for (k=0; k<nb_children; k++) {
+		GF_XMLAttribute *div_reg = NULL;
+		GF_XMLNode *div_global, *div_pck;
+		div_pck = gf_list_get(body_pck->content, k);
+		if (div_pck->type) continue;
+		if (strcmp(div_pck->name, "div")) continue;
+
+		if (ctx->merge_region)
+			div_reg = ttml_get_attr(div_pck, "region");
+
+		//merge input doc
+		div_global = ttml_locate_div(body_global, div_reg ? div_reg->value : NULL, div_idx);
+
+		if (!div_global) {
+			gf_list_rem(body_pck->content, k);
+			gf_list_insert(body_global->content, div_pck, div_idx+1);
+			div_idx++;
+			continue;
+		}
+		div_idx++;
+
+		i=0;
+		while ( (p_pck = gf_list_enum(div_pck->content, &i)) ) {
+			s32 idx;
+			GF_XMLNode *txt;
+			u32 j=0;
+			Bool found = GF_FALSE;
+			if (p_pck->type) continue;
+			if (strcmp(p_pck->name, "p")) continue;
+			while ( (p_global = gf_list_enum(div_global->content, &j)) ) {
+				if (p_global->type) continue;
+				if (strcmp(p_global->name, "p")) continue;
+
+				if (ttml_same_attr(p_pck, p_global)) {
+					found = GF_TRUE;
+					break;
+				}
+			}
+			if (found) continue;
+
+			//insert this p - if last entry in global div is text, insert before
+			txt = gf_list_last(div_global->content);
+			if (txt && txt->type) {
+				idx = gf_list_count(div_global->content) - 1;
+			} else {
+				idx = gf_list_count(div_global->content);
+			}
+
+			i--;
+			gf_list_rem(div_pck->content, i);
+			if (i) {
+				txt = gf_list_get(div_pck->content, i-1);
+				if (txt->type) {
+					i--;
+					gf_list_rem(div_pck->content, i);
+					gf_list_insert(div_global->content, txt, idx);
+					idx++;
+				}
+			}
+			gf_list_insert(div_global->content, p_pck, idx);
+
+		}
+	}
+
+exit:
+	if (ttml_text) gf_free(ttml_text);
+	gf_xml_dom_del(dom);
+	return e;
+}
+
+static GF_Err writegen_flush_ttml(GF_GenDumpCtx *ctx)
+{
+	char *data;
+	u8 *output;
+	u32 size;
+	GF_FilterPacket *pck;
+	if (!ctx->ttml_root) return GF_OK;
+
+	if (ctx->merge_region) {
+		u32 i, count;
+		GF_XMLNode *body_global = ttml_get_body(ctx->ttml_root);
+		count = body_global ? gf_list_count(body_global->content) : 0;
+		for (i=0; i<count; i++) {
+			GF_XMLNode *child;
+			GF_XMLNode *div = gf_list_get(body_global->content, i);
+			if (div->type) continue;
+			if (strcmp(div->name, "div")) continue;
+			if (gf_list_count(div->content) > 1) continue;;
+
+			child = gf_list_get(div->content, 0);
+			if (child && !child->type) continue;;
+
+			gf_list_rem(body_global->content, i);
+			i--;
+			count--;
+			gf_xml_dom_node_del(div);
+		}
+	}
+
+	data = gf_xml_dom_serialize_root(ctx->ttml_root, GF_FALSE, GF_FALSE);
+	if (!data) return GF_OK;
+	size = (u32) strlen(data);
+	pck = gf_filter_pck_new_alloc(ctx->opid, size, &output);
+	if (!pck) return GF_OUT_OF_MEM;
+
+	memcpy(output, data, size);
+	gf_free(data);
+
+	if (ctx->ttml_dash_pck) {
+		gf_filter_pck_merge_properties(ctx->ttml_dash_pck, pck);
+		gf_filter_pck_set_byte_offset(pck, GF_FILTER_NO_BO);
+		gf_filter_pck_set_dependency_flags(pck, 0);
+		gf_filter_pck_unref(ctx->ttml_dash_pck);
+		ctx->ttml_dash_pck = NULL;
+	}
+	gf_filter_pck_set_framing(pck, GF_TRUE, GF_TRUE);
+	gf_xml_dom_node_del(ctx->ttml_root);
+	ctx->ttml_root = NULL;
+	return gf_filter_pck_send(pck);
+}
+
+static GF_Err writegen_flush_ttxt(GF_GenDumpCtx *ctx)
+{
+	const char *footer = "</TextStream>";
+	if (!ctx->need_ttxt_footer) return GF_OK;
+	u32 size = (u32) strlen(footer);
+	u8 *output;
+	GF_FilterPacket *pck = gf_filter_pck_new_alloc(ctx->opid, size, &output);
+	memcpy(output, footer, size);
+	gf_filter_pck_set_framing(pck, GF_FALSE, GF_TRUE);
+	gf_filter_pck_set_byte_offset(pck, GF_FILTER_NO_BO);
+	ctx->need_ttxt_footer = GF_FALSE;
+	return gf_filter_pck_send(pck);
+}
+
+
+#include <gpac/webvtt.h>
+static void webvtt_timestamps_dump(GF_BitStream *bs, u64 start_ts, u64 end_ts, u32 timescale, Bool write_srt)
+{
+	char szTS[200];
+	szTS[0] = 0;
+	GF_WebVTTTimestamp start, end;
+	gf_webvtt_timestamp_set(&start, gf_timestamp_rescale(start_ts, timescale, 1000) );
+	gf_webvtt_timestamp_set(&end, gf_timestamp_rescale(end_ts, timescale, 1000) );
+
+	Bool write_hour = GF_FALSE;
+	if (gf_opts_get_bool("core", "webvtt-hours")) write_hour = GF_TRUE;
+	else if (start.hour || end.hour) write_hour = GF_TRUE;
+	else if (write_srt) write_hour = GF_TRUE;
+
+	if (write_hour) {
+		sprintf(szTS, "%02u:", start.hour);
+		gf_bs_write_data(bs, szTS, (u32) strlen(szTS) );
+	}
+	sprintf(szTS, "%02u:%02u%c%03u", start.min, start.sec, write_srt ? ',' : '.', start.ms);
+	gf_bs_write_data(bs, szTS, (u32) strlen(szTS) );
+
+	sprintf(szTS, " --> ");
+	gf_bs_write_data(bs, szTS, (u32) strlen(szTS) );
+
+	if (write_hour) {
+		sprintf(szTS, "%02u:", end.hour);
+		gf_bs_write_data(bs, szTS, (u32) strlen(szTS) );
+	}
+	sprintf(szTS, "%02u:%02u%c%03u", end.min, end.sec, write_srt ? ',' : '.', end.ms);
+	gf_bs_write_data(bs, szTS, (u32) strlen(szTS) );
+}
+
 GF_Err writegen_process(GF_Filter *filter)
 {
 	GF_GenDumpCtx *ctx = gf_filter_get_udta(filter);
-	GF_FilterPacket *pck, *dst_pck;
+	GF_FilterPacket *pck, *dst_pck = NULL;
 	char *data;
 	u32 pck_size;
 	Bool do_abort = GF_FALSE;
@@ -593,12 +1090,27 @@ GF_Err writegen_process(GF_Filter *filter)
 	if (!pck || !ctx->codecid) {
 		if (gf_filter_pid_is_eos(ctx->ipid)) {
 			if (ctx->is_wav) writegen_write_wav_header(ctx);
+			else if (ctx->ttml_agg) writegen_flush_ttml(ctx);
+			else if (ctx->codecid==GF_CODECID_TX3G) {
+				writegen_flush_ttxt(ctx);
+			}
 			gf_filter_pid_set_eos(ctx->opid);
 			return GF_EOS;
 		}
 		return GF_OK;
 	}
 	ctx->sample_num++;
+
+	if (ctx->dash_mode && ctx->ttml_agg && gf_filter_pck_get_property(pck, GF_PROP_PCK_FILENUM)) {
+		if (ctx->ttml_dash_pck) {
+			writegen_flush_ttml(ctx);
+			gf_filter_pck_unref(ctx->ttml_dash_pck);
+			ctx->ttml_dash_pck = NULL;
+		}
+
+		ctx->ttml_dash_pck = pck;
+		gf_filter_pck_ref_props(&ctx->ttml_dash_pck);
+	}
 
 	if (ctx->sstart) {
 		if (ctx->sstart > ctx->sample_num) {
@@ -616,7 +1128,7 @@ GF_Err writegen_process(GF_Filter *filter)
 		if (!ctx->first_dts_plus_one) {
 			ctx->first_dts_plus_one = dts+1;
 		} else {
-			if (ctx->dur.den * (dts + 1 - ctx->first_dts_plus_one) > ctx->dur.num * gf_filter_pck_get_timescale(pck)) {
+			if (gf_timestamp_greater(dts + 1 - ctx->first_dts_plus_one, gf_filter_pck_get_timescale(pck), ctx->dur.num, ctx->dur.den)) {
 				do_abort = GF_TRUE;
 			}
 		}
@@ -637,18 +1149,37 @@ GF_Err writegen_process(GF_Filter *filter)
 
 	if (ctx->frame) {
 		split = GF_TRUE;
-	} else if (ctx->dcfg_size && gf_filter_pck_get_sap(pck) && !ctx->is_mj2k && (ctx->decinfo!=DECINFO_NO) && !ctx->cfg_sent) {
-		dst_pck = gf_filter_pck_new_shared(ctx->opid, ctx->dcfg, ctx->dcfg_size, NULL);
+	} else if (ctx->dcfg_size && gf_filter_pck_get_sap(pck) && !ctx->is_mj2k && !ctx->webvtt && (ctx->decinfo!=DECINFO_NO) && !ctx->cfg_sent) {
+		if (ctx->codecid==GF_CODECID_FLAC) {
+			u8 *dsi_out;
+			dst_pck = gf_filter_pck_new_alloc(ctx->opid, ctx->dcfg_size+4, &dsi_out);
+			if (!dst_pck) return GF_OUT_OF_MEM;
+			dsi_out[0] = 'f';
+			dsi_out[1] = 'L';
+			dsi_out[2] = 'a';
+			dsi_out[3] = 'C';
+			memcpy(dsi_out+4, ctx->dcfg, ctx->dcfg_size);
+		} else {
+			dst_pck = gf_filter_pck_new_shared(ctx->opid, ctx->dcfg, ctx->dcfg_size, NULL);
+			if (!dst_pck) return GF_OUT_OF_MEM;
+			gf_filter_pck_set_readonly(dst_pck);
+		}
 		gf_filter_pck_merge_properties(pck, dst_pck);
 		gf_filter_pck_set_framing(dst_pck, ctx->first, GF_FALSE);
+		if (ctx->first) {
+			gf_filter_pck_set_property(dst_pck, GF_PROP_PCK_FILENUM, &PROP_UINT(ctx->sample_num) );
+			ctx->sample_num--;
+		}
+
 		ctx->first = GF_FALSE;
-		gf_filter_pck_set_readonly(dst_pck);
 		gf_filter_pck_send(dst_pck);
 		if ((ctx->decinfo==DECINFO_FIRST) && !ctx->split) {
 			ctx->dcfg_size = 0;
 			ctx->dcfg = NULL;
 		}
 		ctx->cfg_sent = GF_TRUE;
+		if (ctx->codecid==GF_CODECID_TX3G)
+			ctx->need_ttxt_footer = GF_TRUE;
 		return GF_OK;
 	}
 	ctx->cfg_sent = GF_FALSE;
@@ -658,9 +1189,64 @@ GF_Err writegen_process(GF_Filter *filter)
 		dst_pck = writegen_write_j2k(ctx, data, pck_size, pck);
 	} else if (ctx->is_bmp) {
 		dst_pck = writegen_write_bmp(ctx, data, pck_size);
+	} else if (ctx->is_y4m) {
+		char *y4m_hdr = NULL;
+		if (ctx->is_y4m==1) {
+			char szInfo[100];
+			const GF_PropertyValue *p;
+			gf_dynstrcat(&y4m_hdr, "YUV4MPEG2", NULL);
+			sprintf(szInfo, " W%d", ctx->w);
+			gf_dynstrcat(&y4m_hdr, szInfo, NULL);
+			sprintf(szInfo, " H%d", ctx->h);
+			gf_dynstrcat(&y4m_hdr, szInfo, NULL);
+			p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_FPS);
+			if (p) {
+				sprintf(szInfo, " F%d:%d", p->value.frac.num, p->value.frac.den);
+				gf_dynstrcat(&y4m_hdr, szInfo, NULL);
+			}
+			p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_SAR);
+			if (p) {
+				sprintf(szInfo, " A%d:%d", p->value.frac.num, p->value.frac.den);
+				gf_dynstrcat(&y4m_hdr, szInfo, NULL);
+			}
+			u32 ilce = gf_filter_pck_get_interlaced(pck);
+			sprintf(szInfo, " I%c", (ilce==0) ? 'p' : ((ilce==1) ? 't' : 'b'));
+			gf_dynstrcat(&y4m_hdr, szInfo, NULL);
+
+			switch (ctx->target_pfmt) {
+			case GF_PIXEL_YUV: gf_dynstrcat(&y4m_hdr, " C420mpeg2", NULL); break;
+			case GF_PIXEL_YUV444: gf_dynstrcat(&y4m_hdr, " C444", NULL); break;
+			case GF_PIXEL_YUV422: gf_dynstrcat(&y4m_hdr, " C422", NULL); break;
+			case GF_PIXEL_GREYSCALE: gf_dynstrcat(&y4m_hdr, " Cmono", NULL); break;
+			case GF_PIXEL_YUVA444: gf_dynstrcat(&y4m_hdr, " C444alpha", NULL); break;
+			}
+			p = gf_filter_pid_get_property_str(ctx->ipid, "yuv4meg_meta");
+			if (p) {
+				gf_dynstrcat(&y4m_hdr, p->value.string, " X");
+			}
+			gf_dynstrcat(&y4m_hdr, "\n", NULL);
+			ctx->is_y4m=2;
+		}
+		if (ctx->is_y4m==2) {
+			gf_dynstrcat(&y4m_hdr, "FRAME\n", NULL);
+		}
+		u8 * output;
+		u32 len = y4m_hdr ? (u32) strlen(y4m_hdr) : 0;
+		dst_pck = gf_filter_pck_new_alloc(ctx->opid, pck_size + len, &output);
+		if (!dst_pck) return GF_OUT_OF_MEM;
+		if (y4m_hdr) memcpy(output, y4m_hdr, len);
+		memcpy(output+len, data, pck_size);
+		if (ctx->split)
+			ctx->is_y4m=1;
+
+		if (y4m_hdr)
+			gf_free(y4m_hdr);
+
 	} else if (ctx->is_wav && ctx->first) {
 		u8 * output;
 		dst_pck = gf_filter_pck_new_alloc(ctx->opid, 44, &output);
+		if (!dst_pck) return GF_OUT_OF_MEM;
+
 		gf_filter_pck_merge_properties(pck, dst_pck);
 		gf_filter_pck_set_byte_offset(dst_pck, GF_FILTER_NO_BO);
 		gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_FALSE);
@@ -669,25 +1255,150 @@ GF_Err writegen_process(GF_Filter *filter)
 		gf_filter_pck_send(dst_pck);
 		ctx->nb_bytes += 44;
 		return GF_OK;
+	} else if (ctx->ttml_agg) {
+		GF_Err e = writegen_push_ttml(ctx, data, pck_size, pck);
+		ctx->first = GF_FALSE;
+		if (e) {
+			gf_filter_pid_drop_packet(ctx->ipid);
+			return e;
+		}
+		goto no_output;
+	} else if (ctx->trunc_audio) {
+		u64 dts = gf_filter_pck_get_dts(pck);
+		if (dts==GF_FILTER_NO_TS)
+			dts = gf_filter_pck_get_cts(pck);
+
+		if (!ctx->first_dts_plus_one) {
+			ctx->first_dts_plus_one = dts+1;
+		} else {
+			u32 timescale = gf_filter_pck_get_timescale(pck);
+			u32 dur = gf_filter_pck_get_duration(pck);
+			if (gf_timestamp_greater(dts + dur + 1 - ctx->first_dts_plus_one, timescale, ctx->dur.num, ctx->dur.den)) {
+				u32 bpp;
+				u8 *odata;
+				const GF_PropertyValue *p;
+				dur = ctx->dur.num * timescale / ctx->dur.den;
+				dur -= (u32) (dts + 1 - ctx->first_dts_plus_one);
+
+				bpp = gf_audio_fmt_bit_depth(ctx->target_afmt);
+				p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_NUM_CHANNELS);
+				if (p) bpp *= p->value.uint;
+				bpp/= 8;
+
+				p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_SAMPLE_RATE);
+				if (p && (p->value.uint != timescale)) {
+					dur *= p->value.uint;
+					dur /= timescale;
+				}
+				assert(pck_size >= bpp * dur);
+				pck_size = bpp * dur;
+
+				dst_pck = gf_filter_pck_new_alloc(ctx->opid, pck_size, &odata);
+				if (dst_pck)
+					memcpy(odata, data, pck_size);
+			}
+		}
+
+		if (!dst_pck) {
+			dst_pck = gf_filter_pck_new_ref(ctx->opid, 0, 0, pck);
+		}
+	} else if (ctx->webvtt || ctx->dump_srt) {
+		const GF_PropertyValue *p;
+
+		if (!data || !pck_size) {
+			ctx->sample_num--;
+			goto no_output;
+		}
+
+		u64 start = gf_filter_pck_get_cts(pck);
+		u64 end = start + gf_filter_pck_get_duration(pck);
+		u32 timescale = gf_filter_pck_get_timescale(pck);
+
+		if (!ctx->bs) ctx->bs = gf_bs_new(NULL, 0, GF_BITSTREAM_WRITE);
+		else gf_bs_reassign_buffer(ctx->bs, ctx->write_buf, ctx->write_alloc);
+
+		if (ctx->first && !ctx->dump_srt) {
+			if (ctx->dcfg && ctx->dcfg_size) {
+				u32 len = ctx->dcfg_size;
+				if (ctx->dcfg[len-1]==0) len--;
+				gf_bs_write_data(ctx->bs, ctx->dcfg, len);
+				if (ctx->dcfg[len-1]!='\n')
+					gf_bs_write_data(ctx->bs, "\n", 1);
+				gf_bs_write_data(ctx->bs, "\n", 1);
+			} else
+				gf_bs_write_data(ctx->bs, "WEBVTT\n\n", 8);
+		}
+		p = gf_filter_pck_get_property_str(pck, "vtt_pre");
+		if (!ctx->dump_srt && p && p->value.string) {
+			u32 len = (u32) strlen(p->value.string);
+			gf_bs_write_data(ctx->bs, p->value.string, len);
+			if (len && (p->value.string[len-1]!='\n'))
+				gf_bs_write_data(ctx->bs, "\n", 1);
+			gf_bs_write_data(ctx->bs, "\n", 1);
+		}
+		p = gf_filter_pck_get_property_str(pck, "vtt_cueid");
+		if (!ctx->dump_srt && p && p->value.string) {
+			u32 len = (u32) strlen(p->value.string) ;
+			gf_bs_write_data(ctx->bs, p->value.string, len);
+			if (len && (p->value.string[len-1]!='\n'))
+				gf_bs_write_data(ctx->bs, "\n", 1);
+		}
+
+		if (ctx->dump_srt) {
+			char szCID[100];
+			sprintf(szCID, "%d\n", ctx->sample_num);
+			gf_bs_write_data(ctx->bs, szCID, (u32) strlen(szCID));
+		}
+		webvtt_timestamps_dump(ctx->bs, start, end, timescale, ctx->dump_srt);
+
+		p = gf_filter_pck_get_property_str(pck, "vtt_settings");
+		if (!ctx->dump_srt && p && p->value.string) {
+			gf_bs_write_data(ctx->bs, " ", 1);
+			gf_bs_write_data(ctx->bs, p->value.string, (u32) strlen(p->value.string));
+		}
+
+		gf_bs_write_data(ctx->bs, "\n", 1);
+		if (data) {
+			gf_bs_write_data(ctx->bs, data, pck_size);
+			if (pck_size && (data[pck_size-1] != '\n'))
+				gf_bs_write_data(ctx->bs, "\n", 1);
+		}
+		gf_bs_write_data(ctx->bs, "\n", 1);
+
+		u8 *odata;
+		u32 vtt_data_size, alloc_size;
+		gf_bs_get_content_no_truncate(ctx->bs, &ctx->write_buf, &vtt_data_size, &alloc_size);
+		if (alloc_size>ctx->write_alloc) ctx->write_alloc = alloc_size;
+
+		dst_pck = gf_filter_pck_new_alloc(ctx->opid, vtt_data_size, &odata);
+		memcpy(odata, ctx->write_buf, vtt_data_size);
 	} else {
-		dst_pck = gf_filter_pck_new_ref(ctx->opid, NULL, 0, pck);
+		dst_pck = gf_filter_pck_new_ref(ctx->opid, 0, 0, pck);
 	}
+	if (!dst_pck) return GF_OUT_OF_MEM;
+	
 	gf_filter_pck_merge_properties(pck, dst_pck);
 	//don't keep byte offset
 	gf_filter_pck_set_byte_offset(dst_pck, GF_FILTER_NO_BO);
 
 	if (split) {
-		gf_filter_pck_set_property(dst_pck, GF_PROP_PCK_FILENUM, &PROP_UINT(ctx->sample_num) );
-		gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
+		if (ctx->first)
+			gf_filter_pck_set_property(dst_pck, GF_PROP_PCK_FILENUM, &PROP_UINT(ctx->sample_num) );
+		gf_filter_pck_set_framing(dst_pck, ctx->first, ctx->need_ttxt_footer ? GF_FALSE : GF_TRUE);
+		ctx->first = GF_TRUE;
 	} else {
 		gf_filter_pck_set_framing(dst_pck, ctx->first, GF_FALSE);
 		ctx->first = GF_FALSE;
 	}
 
-	gf_filter_pck_send(dst_pck);
 	gf_filter_pck_set_seek_flag(dst_pck, 0);
+	gf_filter_pck_send(dst_pck);
+
+	if (split && ctx->need_ttxt_footer)
+		writegen_flush_ttxt(ctx);
 	ctx->nb_bytes += pck_size;
 
+no_output:
 	if (ctx->exporter) {
 		u32 timescale = gf_filter_pck_get_timescale(pck);
 		u64 ts = gf_filter_pck_get_dts(pck);
@@ -695,8 +1406,7 @@ GF_Err writegen_process(GF_Filter *filter)
 			ts = gf_filter_pck_get_cts(pck);
 		if (ts!=GF_FILTER_NO_TS) {
 			ts += gf_filter_pck_get_duration(pck);
-			ts *= ctx->duration.den;
-			ts /= timescale;
+			ts = gf_timestamp_rescale(ts, timescale, ctx->duration.den);
 			gf_set_progress("Exporting", ts, ctx->duration.num);
 		}
 	}
@@ -778,7 +1488,7 @@ static GF_FilterCapability GenDumpCaps[] =
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG4_PART2),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
 	CAP_BOOL(GF_CAPS_INPUT,GF_PROP_PID_UNFRAMED, GF_TRUE),
-	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "cmp|m4ve"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "cmp|m4ve|m4v"),
 	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "video/mp4v-es"),
 	{0},
 
@@ -846,6 +1556,15 @@ static GF_FilterCapability GenDumpCaps[] =
 	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/aac+latm"),
 	{0},
 
+	//we accept unframed USAC + LATM
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_USAC),
+	CAP_BOOL(GF_CAPS_INPUT,GF_PROP_PID_UNFRAMED_LATM, GF_TRUE),
+	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "usac|xheaac|latm"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/xheaac+latm"),
+	{0},
+
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_PNG),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
@@ -869,10 +1588,23 @@ static GF_FilterCapability GenDumpCaps[] =
 
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG_AUDIO),
+	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "mp3"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/mp3|audio/x-mp3"),
+	{0},
+
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG2_PART3),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
-	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "mp3|mp1|mp2"),
-	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/mp3|audio/x-mp3"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "mp2"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/mpeg|audio/x-mp2"),
+	{0},
+
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPEG_AUDIO_L1),
+	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "mp1"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/mpeg|audio/x-mp1"),
 	{0},
 
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
@@ -919,10 +1651,32 @@ static GF_FilterCapability GenDumpCaps[] =
 	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "x-subtitle/srt|subtitle/srt|text/srt"),
 	{0},
 
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_TEXT),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_META_XML),
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_SUBS_XML),
 	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "xml|txml|ttml"),
 	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "subtitle/ttml|text/ttml|application/xml+ttml"),
+	{0},
+
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_TEXT),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_WEBVTT),
+	CAP_BOOL(GF_CAPS_INPUT, GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "vtt"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "subtitle/vtt|text/vtt"),
+	{0},
+
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_TEXT),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_SIMPLE_TEXT),
+	CAP_BOOL(GF_CAPS_INPUT, GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "srt"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "subtitle/srt|text/srt"),
+	{0},
+
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_TEXT),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_TX3G),
+	CAP_BOOL(GF_CAPS_INPUT, GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "ttxt"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "x-subtitle/ttxt|subtitle/ttxt|text/ttxt"),
 	{0},
 
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
@@ -950,6 +1704,44 @@ static GF_FilterCapability GenDumpCaps[] =
 	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "flac"),
 	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/flac"),
 	{0},
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MPHA),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_MHAS),
+	CAP_BOOL(GF_CAPS_INPUT,GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "mhas"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/mpegh"),
+	{0},
+
+	//we accept unframed VVC (annex B format)
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_VVC),
+	CAP_BOOL(GF_CAPS_INPUT,GF_PROP_PID_UNFRAMED, GF_TRUE),
+	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "266|h266|vvc|lvvc"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "video/vvc|video/lvvc"),
+	{0},
+
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_TRUEHD),
+	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "mlp"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "audio/truehd"),
+	{0},
+
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_FFV1),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "ffv1"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "video/x-ffv1"),
+	{0},
+
+	//raw color dump YUV and RGB - keep it as first for field extension assignment
+	//cf below
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
+	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_RAW),
+	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_FILE_EXT, "y4m"),
+	CAP_STRING(GF_CAPS_OUTPUT, GF_PROP_PID_MIME, "video/x-yuv4mpeg"),
+	{0},
 
 	//anything else: only for explicit dump (filter loaded on purpose), otherwise don't load for filter link resolution
 	CAP_UINT(GF_CAPS_OUTPUT_LOADED_FILTER, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
@@ -965,12 +1757,16 @@ static GF_FilterCapability GenDumpCaps[] =
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_HEVC),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_LHVC),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_MPEG4_PART2),
-	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
+	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_VVC),
+
+	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_MPEG2_PART3),
+	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_MPEG_AUDIO),
+	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_MPEG_AUDIO_L1),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_AAC_MPEG4),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_AAC_MPEG2_MP),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_AAC_MPEG2_LCP),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_AAC_MPEG2_SSRP),
-	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_RAW),
+//	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_RAW),
 
 	//WebVTT needs rewrite
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED,  GF_PROP_PID_CODECID, GF_CODECID_WEBVTT),
@@ -1000,10 +1796,11 @@ static GF_FilterArgs GenDumpArgs[] =
 	"- sap: inserted at each SAP\n"
 	"- auto: selects between no and first based on media type", GF_PROP_UINT, "auto", "no|first|sap|auto", GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(split), "force one file per decoded frame", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(frame), "force single frame dump with no rewrite. In this mode, all codecids are supported", GF_PROP_BOOL, "false", NULL, 0},
+	{ OFFS(frame), "force single frame dump with no rewrite. In this mode, all codec types are supported", GF_PROP_BOOL, "false", NULL, 0},
 	{ OFFS(sstart), "start number of frame to forward. If 0, all samples are forwarded", GF_PROP_UINT, "0", NULL, 0},
 	{ OFFS(send), "end number of frame to forward. If less than start frame, all samples after start are forwarded", GF_PROP_UINT, "0", NULL, 0},
 	{ OFFS(dur), "duration of media to forward after first sample. If 0, all samples are forwarded", GF_PROP_FRACTION, "0", NULL, 0},
+	{ OFFS(merge_region), "merge TTML regions with same ID while reassembling TTML doc", GF_PROP_BOOL, "false", NULL, 0},
 	{0}
 };
 
@@ -1013,13 +1810,21 @@ void writegen_finalize(GF_Filter *filter)
 {
 	GF_GenDumpCtx *ctx = gf_filter_get_udta(filter);
 	if (ctx->bs) gf_bs_del(ctx->bs);
+	if (ctx->write_buf) gf_free(ctx->write_buf);
+	if (ctx->ttml_root)
+		gf_xml_dom_node_del(ctx->ttml_root);
+
+	if (ctx->ttml_dash_pck) {
+		gf_filter_pck_unref(ctx->ttml_dash_pck);
+		ctx->ttml_dash_pck = NULL;
+	}
 }
 
 GF_FilterRegister GenDumpRegister = {
 	.name = "writegen",
 	GF_FS_SET_DESCRIPTION("Stream to file")
 	GF_FS_SET_HELP("Generic single stream to file converter, used when extracting/converting PIDs.\n"
-	"The writegen filter should usually not be explicetly loaded without a source ID specified, since the filter would likely match any pid connection.")
+	"The writegen filter should usually not be explicitly loaded without a source ID specified, since the filter would likely match any PID connection.")
 	.private_size = sizeof(GF_GenDumpCtx),
 	.args = GenDumpArgs,
 	.initialize = writegen_initialize,
@@ -1062,3 +1867,4 @@ const GF_FilterRegister *writegen_register(GF_FilterSession *session)
 	return &GenDumpRegister;
 }
 
+#endif /*GPAC_DISABLE_CORE_TOOLS*/

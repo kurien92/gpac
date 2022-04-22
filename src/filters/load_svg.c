@@ -2,7 +2,7 @@
  *					GPAC Multimedia Framework
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2017
+ *			Copyright (c) Telecom ParisTech 2005-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / SVG loader filter
@@ -112,18 +112,6 @@ static GF_Err svgin_process(GF_Filter *filter)
 		return GF_OK;
 	}
 
-#ifdef FILTER_FIXME
-	if (stream_time==(u32)-1) {
-		if (svgin->src) gf_gzclose(svgin->src);
-		svgin->src = NULL;
-		gf_sm_load_done(&svgin->loader);
-		svgin->loader.fileName = NULL;
-		svgin->file_pos = 0;
-		gf_sg_reset(svgin->scene->graph);
-		return GF_OK;
-	}
-#endif
-
 	switch (svgin->codecid) {
 	/*! streaming SVG*/
 	case GF_CODECID_SVG:
@@ -174,9 +162,10 @@ static GF_Err svgin_process(GF_Filter *filter)
 		}
 		data = gf_filter_pck_get_data(pck, &size);
 
-		buf2 = gf_malloc(size);
+		buf2 = gf_malloc(size+1);
 		bs = gf_bs_new((u8 *)data, size, GF_BITSTREAM_READ);
 		memcpy(buf2, data, size);
+		buf2[size] = 0;
 
 		gf_filter_pid_drop_packet(svgin->in_pid);
 		e = GF_OK;
@@ -420,7 +409,7 @@ static Bool svgin_process_event(GF_Filter *filter, const GF_FilterEvent *com)
 					gf_sm_load_init(&svgin->loader);
 
 				if (svgin->scene->root_od->ck && !svgin->scene->root_od->ck->clock_init)
-					gf_clock_set_time(svgin->scene->root_od->ck, 0);
+					gf_clock_set_time(svgin->scene->root_od->ck, 0, 1000);
 
 				//init clocks
 				gf_odm_check_buffering(svgin->scene->root_od, svgin->in_pid);
@@ -458,7 +447,9 @@ static const GF_FilterArgs SVGInArgs[] =
 GF_FilterRegister SVGInRegister = {
 	.name = "svgplay",
 	GF_FS_SET_DESCRIPTION("SVG loader")
-	GF_FS_SET_HELP("This filter parses SVG files directly into the scene graph of the compositor. It cannot be used to dump content.")
+	GF_FS_SET_HELP("This filter parses SVG files directly into the scene graph of the compositor.\n"
+	"\n"
+	"When [-sax_dur=N]() is set, the filter will do a progressive load of the source and cancel current loading when processing time is higher than `N`.\n")
 	.private_size = sizeof(SVGIn),
 	.flags = GF_FS_REG_MAIN_THREAD,
 	.args = SVGInArgs,

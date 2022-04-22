@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre, Cyril Concolato, Romain Bouqueau
- *			Copyright (c) Telecom ParisTech 2006-2019
+ *			Copyright (c) Telecom ParisTech 2006-2022
  *
  *  This file is part of GPAC / MPEG2-TS sub-project
  *
@@ -97,6 +97,8 @@ enum
 	/* ... */
 	GF_M2TS_MPEG4_ODUPDATE_DESCRIPTOR			= 0x35,
 
+	GF_M2TS_HEVC_VIDEO_DESCRIPTOR			= 0x38,
+
 	/* 0x2D - 0x3F - ISO/IEC 13818-6 values */
 	/* 0x40 - 0xFF - User Private values */
 	GF_M2TS_DVB_NETWORK_NAME_DESCRIPTOR			= 0x40,
@@ -137,6 +139,8 @@ enum
 	/* ... */
 	GF_M2TS_DVB_EAC3_DESCRIPTOR				= 0x7A,
 	GF_M2TS_DVB_LOGICAL_CHANNEL_DESCRIPTOR = 0x83,
+
+	GF_M2TS_DOLBY_VISION_DESCRIPTOR = 0xB0
 };
 
 /*! Reserved PID values */
@@ -215,62 +219,82 @@ enum {
 /*! MPEG-2 TS Media types*/
 typedef enum
 {
-	GF_M2TS_VIDEO_MPEG1				= 0x01,
-	GF_M2TS_VIDEO_MPEG2				= 0x02,
-	GF_M2TS_AUDIO_MPEG1				= 0x03,
-	GF_M2TS_AUDIO_MPEG2				= 0x04,
-	GF_M2TS_PRIVATE_SECTION			= 0x05,
-	GF_M2TS_PRIVATE_DATA			= 0x06,
-	GF_M2TS_MHEG					= 0x07,
-	GF_M2TS_13818_1_DSMCC			= 0x08,
-	GF_M2TS_H222_1					= 0x09,
-	GF_M2TS_13818_6_ANNEX_A			= 0x0A,
-	GF_M2TS_13818_6_ANNEX_B			= 0x0B,
-	GF_M2TS_13818_6_ANNEX_C			= 0x0C,
-	GF_M2TS_13818_6_ANNEX_D			= 0x0D,
-	GF_M2TS_13818_1_AUXILIARY		= 0x0E,
-	GF_M2TS_AUDIO_AAC				= 0x0F,
-	GF_M2TS_VIDEO_MPEG4				= 0x10,
-	GF_M2TS_AUDIO_LATM_AAC			= 0x11,
+	GF_M2TS_VIDEO_MPEG1						= 0x01,
+	GF_M2TS_VIDEO_MPEG2						= 0x02,
+	GF_M2TS_AUDIO_MPEG1						= 0x03,
+	GF_M2TS_AUDIO_MPEG2						= 0x04,
+	GF_M2TS_PRIVATE_SECTION					= 0x05,
+	GF_M2TS_PRIVATE_DATA					= 0x06,
+	GF_M2TS_MHEG							= 0x07,
+	GF_M2TS_13818_1_DSMCC					= 0x08,
+	GF_M2TS_H222_1							= 0x09,
+	GF_M2TS_13818_6_ANNEX_A					= 0x0A,
+	GF_M2TS_13818_6_ANNEX_B					= 0x0B,
+	GF_M2TS_13818_6_ANNEX_C					= 0x0C,
+	GF_M2TS_13818_6_ANNEX_D					= 0x0D,
+	GF_M2TS_13818_1_AUXILIARY				= 0x0E,
+	GF_M2TS_AUDIO_AAC						= 0x0F,
+	GF_M2TS_VIDEO_MPEG4						= 0x10,
+	GF_M2TS_AUDIO_LATM_AAC					= 0x11,
+	GF_M2TS_SYSTEMS_MPEG4_PES				= 0x12,
+	GF_M2TS_SYSTEMS_MPEG4_SECTIONS			= 0x13,
+	GF_M2TS_SYNC_DOWNLOAD_PROTOCOL			= 0x14,
+	GF_M2TS_METADATA_PES					= 0x15,
+	GF_M2TS_METADATA_SECTION				= 0x16,
+	GF_M2TS_METADATA_DATA_CAROUSEL			= 0x17,
+	GF_M2TS_METADATA_OBJECT_CAROUSEL		= 0x18,
+	GF_M2TS_METADATA_SYNC_DOWNLOAD_PROTOCOL	= 0x19,
+	GF_M2TS_IPMP							= 0x1A,
+	GF_M2TS_VIDEO_H264						= 0x1B,
+	GF_M2TS_MPEG4_AUDIO_NO_SYNTAX			= 0x1C,
+	GF_M2TS_MPEG4_TEXT						= 0x1D,
+	GF_M2TS_AUX_VIDEO_23002_2				= 0x1E,
+	GF_M2TS_VIDEO_SVC						= 0x1F,
+	GF_M2TS_VIDEO_MVC						= 0x20,
+	GF_M2TS_VIDEO_15444_1					= 0x21,
+	GF_M2TS_VIDEO_MPEG2_ADD_STEREO			= 0x22,
+	GF_M2TS_VIDEO_H264_ADD_STEREO			= 0x23,
+	GF_M2TS_VIDEO_HEVC						= 0x24,
+	GF_M2TS_VIDEO_HEVC_TEMPORAL				= 0x25,
+	GF_M2TS_VIDEO_MVCD						= 0x26,
+	GF_M2TS_TEMI							= 0x27,
+	GF_M2TS_VIDEO_SHVC						= 0x28,
+	GF_M2TS_VIDEO_SHVC_TEMPORAL				= 0x29,
+	GF_M2TS_VIDEO_MHVC						= 0x2A,
+	GF_M2TS_VIDEO_MHVC_TEMPORAL				= 0x2B,
+	GF_M2TS_GREEN							= 0x2C,
+	GF_M2TS_MHAS_MAIN						= 0x2D,
+	GF_M2TS_MHAS_AUX						= 0x2E,
+	GF_M2TS_QUALITY_SEC 					= 0x2F,
+	GF_M2TS_MORE_SEC					 	= 0x30,
+	GF_M2TS_VIDEO_HEVC_MCTS					= 0x31,
+	GF_M2TS_JPEG_XS							= 0x32,
+	GF_M2TS_VIDEO_VVC						= 0x33,
+	GF_M2TS_VIDEO_VVC_TEMPORAL				= 0x34,
 
-	GF_M2TS_SYSTEMS_MPEG4_PES		= 0x12,
-	GF_M2TS_SYSTEMS_MPEG4_SECTIONS	= 0x13,
+	GF_M2TS_HLS_AC3_CRYPT		= 0xc1,
+	GF_M2TS_HLS_EC3_CRYPT		= 0xc2,
+	GF_M2TS_HLS_AAC_CRYPT		= 0xcf,
+	GF_M2TS_HLS_AVC_CRYPT		= 0xdb,
 
-	GF_M2TS_METADATA_PES			= 0x15,
+	/*the rest is internal use*/
 
-	GF_M2TS_VIDEO_H264				= 0x1B,
-	GF_M2TS_VIDEO_SVC				= 0x1F,
-	GF_M2TS_VIDEO_HEVC				= 0x24,
-	GF_M2TS_VIDEO_HEVC_TEMPORAL		= 0x25,
-	GF_M2TS_VIDEO_MVCD				= 0x26,
-	GF_M2TS_TEMI					= 0x27,
-	GF_M2TS_VIDEO_SHVC				= 0x28,
-	GF_M2TS_VIDEO_SHVC_TEMPORAL		= 0x29,
-	GF_M2TS_VIDEO_MHVC				= 0x2A,
-	GF_M2TS_VIDEO_MHVC_TEMPORAL		= 0x2B,
-
-	GF_M2TS_GREEN					= 0x2C,
-	GF_M2TS_MHAS_MAIN				= 0x2D,
-	GF_M2TS_MHAS_AUX				= 0x2E,
-
-	GF_M2TS_QUALITY_SEC				= 0x2F,
-	GF_M2TS_MORE_SEC				= 0x30,
-
-	GF_M2TS_VIDEO_HEVC_MCTS			= 0x31,
-
+	GF_M2TS_VIDEO_VC1				= 0xEA,
 	GF_M2TS_VIDEO_DCII				= 0x80,
 	GF_M2TS_AUDIO_AC3				= 0x81,
-	GF_M2TS_AUDIO_DTS				= 0x8A,
+	GF_M2TS_AUDIO_DTS				= 0x82,
+	GF_M2TS_AUDIO_TRUEHD			= 0x83,
+	GF_M2TS_AUDIO_EC3				= 0x84,
 	GF_M2TS_MPE_SECTIONS            = 0x90,
 	GF_M2TS_SUBTITLE_DVB			= 0x100,
+	GF_M2TS_AUDIO_OPUS				= 0x101,
+	GF_M2TS_VIDEO_AV1				= 0x102,
 
-	/*internal use*/
-	GF_M2TS_AUDIO_EC3				= 0x150,
-	GF_M2TS_VIDEO_VC1				= 0x151,
 	GF_M2TS_DVB_TELETEXT			= 0x152,
 	GF_M2TS_DVB_VBI					= 0x153,
 	GF_M2TS_DVB_SUBTITLE			= 0x154,
 	GF_M2TS_METADATA_ID3_HLS		= 0x155,
+
 } GF_M2TSStreamType;
 
 
@@ -278,7 +302,15 @@ typedef enum
 enum
 {
 	GF_M2TS_RA_STREAM_AC3	= GF_4CC('A','C','-','3'),
+	GF_M2TS_RA_STREAM_EAC3	= GF_4CC('E','A','C','3'),
 	GF_M2TS_RA_STREAM_VC1	= GF_4CC('V','C','-','1'),
+	GF_M2TS_RA_STREAM_HEVC	= GF_4CC('H','E','V','C'),
+	GF_M2TS_RA_STREAM_DTS1	= GF_4CC('D','T','S','1'),
+	GF_M2TS_RA_STREAM_DTS2	= GF_4CC('D','T','S','2'),
+	GF_M2TS_RA_STREAM_DTS3	= GF_4CC('D','T','S','3'),
+	GF_M2TS_RA_STREAM_OPUS	= GF_4CC('O','p','u','s'),
+	GF_M2TS_RA_STREAM_DOVI	= GF_4CC('D','O','V','I'),
+	GF_M2TS_RA_STREAM_AV1	= GF_4CC('A','V','0','1'),
 
 	GF_M2TS_RA_STREAM_GPAC	= GF_4CC('G','P','A','C')
 };
@@ -462,7 +494,9 @@ enum
 	/*! a TEMI locator has been found or repeated*/
 	GF_M2TS_EVT_TEMI_LOCATION,
 	/*! a TEMI timecode has been found*/
-	GF_M2TS_EVT_TEMI_TIMECODE
+	GF_M2TS_EVT_TEMI_TIMECODE,
+	/*! a stream is about to be removed -  - associated parameter: pointer to GF_M2TS_ES being removed*/
+	GF_M2TS_EVT_STREAM_REMOVED
 };
 
 /*! table parsing state*/
@@ -592,7 +626,7 @@ typedef struct
 	const char *external_URL;
 	Bool is_announce, is_splicing;
 	Bool reload_external;
-	Double activation_countdown;
+	GF_Fraction activation_countdown;
 } GF_M2TS_TemiLocationDescriptor;
 
 /*! MPEG-2 TS demuxer TEMI timecode*/
@@ -687,7 +721,13 @@ enum
 	/*! flag used to signal next discontinuity on stream should be ignored*/
 	GF_M2TS_ES_IGNORE_NEXT_DISCONTINUITY = 1<<17,
 	/*! flag used by importers/readers to mark streams that have been seen already in PMT process (update/found)*/
-	GF_M2TS_ES_ALREADY_DECLARED = 1<<18
+	GF_M2TS_ES_ALREADY_DECLARED = 1<<18,
+	/*! flag indicates TEMI info is declared on this stream*/
+	GF_M2TS_ES_TEMI_INFO = 1<<19,
+	/*! flag indicates each PES is a full AU*/
+	GF_M2TS_ES_FULL_AU = 1<<20,
+	/*! flag indicates ES is not sparse (AV), used to check discontinuity - set by user*/
+	GF_M2TS_CHECK_DISC = 1<<21,
 };
 
 /*! macro for abstract Section/PES stream object, only used for type casting*/
@@ -702,6 +742,7 @@ enum
 			void *user; \
 			GF_List *props; \
 			u64 first_dts; \
+			Bool is_seg_start; \
 			u32 service_id;
 
 /*! abstract Section/PES stream object*/
@@ -822,7 +863,7 @@ typedef struct tag_m2ts_pes
 
 	/*! PES reframer callback. If NULL, pes processing is skiped
 
-	returns the number of bytes NOT consummed from the input data buffer - these bytes are kept when reassembling the next PES packet*/
+	returns the number of bytes NOT consumed from the input data buffer - these bytes are kept when reassembling the next PES packet*/
 	u32 (*reframe)(struct tag_m2ts_demux *ts, struct tag_m2ts_pes *pes, Bool same_pts, u8 *data, u32 data_len, GF_M2TS_PESHeader *hdr);
 
 	/*! DVB subtitling info*/
@@ -841,6 +882,12 @@ typedef struct tag_m2ts_pes
 	GF_M2TS_TemiTimecodeDescriptor temi_tc;
 	/*! flag set to indicate a TEMI descriptor should be flushed with next packet*/
 	Bool temi_pending;
+	/*! flag set to indicate the last PES packet was not flushed (HLS) to avoid warning on same PTS/DTS used*/
+	Bool is_resume;
+	/*! DolbiVison info, last byte set to 1 if non-compatible signaling*/
+	u8 dv_info[25];
+
+	u64 map_utc, map_utc_pcr, map_pcr;
 } GF_M2TS_PES;
 
 /*! reserved streamID for PES headers*/
@@ -885,11 +932,17 @@ typedef struct
 /*! TDT/TOT (Time and Date table) information*/
 typedef struct
 {
+	/*! year*/
 	u16 year;
+	/*! month, from 0 to 11*/
 	u8 month;
+	/*! day, from 1 to 31*/
 	u8 day;
+	/*! hour*/
 	u8 hour;
+	/*! minute*/
 	u8 minute;
+	/*! second*/
 	u8 second;
 } GF_M2TS_TDT_TOT;
 
@@ -1114,6 +1167,12 @@ void gf_m2ts_demux_del(GF_M2TS_Demuxer *demux);
 \param demux the target MPEG-2 TS demultiplexer
 */
 void gf_m2ts_reset_parsers(GF_M2TS_Demuxer *demux);
+
+/*! set all streams is_seg_start variable to GF_TRUE
+\param demux the target MPEG-2 TS demultiplexer
+*/
+void gf_m2ts_mark_seg_start(GF_M2TS_Demuxer *demux);
+
 /*! resets all parsers (PES, sections) of a given program
 \param demux the target MPEG-2 TS demultiplexer
 \param program the target MPEG-2 TS program
@@ -1149,13 +1208,15 @@ GF_M2TS_SDT *gf_m2ts_get_sdt_info(GF_M2TS_Demuxer *demux, u32 program_id);
 /*! flushes a given stream. This is used to flush internal demultiplexer buffers on end of stream
 \param demux the target MPEG-2 demultiplexer
 \param pes the target stream to flush
+\param force_flush if GF_TRUE, flushes all streams, otherwise do not flush stream with known PES length and not yet completed (for HLS)
 */
-void gf_m2ts_flush_pes(GF_M2TS_Demuxer *demux, GF_M2TS_PES *pes);
+void gf_m2ts_flush_pes(GF_M2TS_Demuxer *demux, GF_M2TS_PES *pes, Bool force_flush);
 
 /*! flushes all streams in the mux. This is used to flush internal demultiplexer buffers on end of stream
 \param demux the target MPEG-2 demultiplexer
+\param no_force_flush do not force a flush of incomplete PES (used for HLS)
 */
-void gf_m2ts_flush_all(GF_M2TS_Demuxer *demux);
+void gf_m2ts_flush_all(GF_M2TS_Demuxer *demux, Bool no_force_flush);
 
 
 /*! MPEG-2 TS packet header*/
@@ -1233,7 +1294,7 @@ typedef struct
 \brief Basic stream interface API used by MPEG-2 TS muxer.
 
 This section documents the ES interface used by the MPEG-2 TS muxer. This interface is used to
-describe streams and packets consummed by the TS muxer independently from the rest of GPAC (filter packets)
+describe streams and packets consumed by the TS muxer independently from the rest of GPAC (filter packets)
 
 @{
 */
@@ -1343,6 +1404,12 @@ enum
 	GF_ESI_STREAM_WITHOUT_MPEG4_SYSTEMS =	1<<3,
 	/*! stream is not signaled through MPEG-4 Systems (OD stream) */
 	GF_ESI_AAC_USE_LATM =	1<<4,
+	/*! temporrary end of stream (flush of segment)*/
+	GF_ESI_STREAM_FLUSH	=	1<<5,
+	/*! stream uses HLS SAES encryption*/
+	GF_ESI_STREAM_HLS_SAES	=	1<<6,
+	/*! stream uses non-backward DolbyVision signaling*/
+	GF_ESI_FORCE_DOLBY_VISION = 1<<7,
 };
 
 /*! elementary stream information*/
@@ -1385,6 +1452,12 @@ typedef struct __elementary_stream_ifce
 	void *output_udta;
 	/*! stream dependency ID*/
 	u32 depends_on_stream;
+
+	/*! dv info, not valid if first byte not 1*/
+	u8 dv_info[24];
+
+	/*! registration authority code to use, 0 if not applicable*/
+	u32 ra_code;
 } GF_ESInterface;
 
 /*! @} */
@@ -1487,8 +1560,6 @@ typedef struct __m2ts_mux_stream {
 	Bool pcr_only_mode;
 	/*! tables for section PIDs*/
 	GF_M2TS_Mux_Table *tables;
-	/*! init verision of table*/
-	u8 initial_version_number;
 	/*! total table sizes for bitrate estimation (PMT/PAT/...)*/
 	u32 total_table_size;
 	/*! current table - used for on-the-fly packetization of sections */
@@ -1499,6 +1570,10 @@ typedef struct __m2ts_mux_stream {
 	u32 current_section_offset;
 	/*! carousel rate in ms*/
 	u32 refresh_rate_ms;
+	/*! init verision of table*/
+	u8 initial_version_number;
+	/*! PES version of transport for this codec type is forced*/
+	u8 force_pes;
 	/*! table needs updating*/
 	Bool table_needs_update;
 	/*! table needs send*/
@@ -1532,8 +1607,10 @@ typedef struct __m2ts_mux_stream {
 	u32 next_payload_size;
 	/*! number of bytes to copy from next packet*/
 	u32 copy_from_next_packets;
-	/*! size of nex next payload, 0 if unknown*/
+	/*! size of next next payload, 0 if unknown*/
 	u32 next_next_payload_size;
+	/*! size of next next next payload, 0 if unknown*/
+	u32 next_next_next_payload_size;
 	/*! size of packetized packet*/
 	u32 pes_data_len;
 	/*! remaining bytes to send as TS packets*/
@@ -1590,6 +1667,9 @@ typedef struct __m2ts_mux_stream {
 	u32 pck_sap_type;
 	/*! packet SAP time (=PTS) when segmenting the TS*/
 	u64 pck_sap_time;
+
+	/*! last process result*/
+	u32 process_res;
 } GF_M2TS_Mux_Stream;
 
 /*! MPEG-4 systems signaling mode*/
@@ -1598,7 +1678,7 @@ enum {
 	GF_M2TS_MPEG4_SIGNALING_NONE = 0,
 	/*! Full MPEG-4 signaling*/
 	GF_M2TS_MPEG4_SIGNALING_FULL,
-	/*MPEG-4 over MPEG-2 profile where PES media streams may be refered to by the scene without SL-packetization*/
+	/*MPEG-4 over MPEG-2 profile where PES media streams may be referred to by the scene without SL-packetization*/
 	GF_M2TS_MPEG4_SIGNALING_SCENE
 };
 
@@ -1749,7 +1829,9 @@ struct __m2ts_mux {
 
 	/*! static write bitstream object for formatting packets*/
 	GF_BitStream *pck_bs;
-	/*set to TRUE if the packet output is the first packet of a SAP AU (used when dashing)*/
+	/*! PID to watch for SAP insertions*/
+	u32 ref_pid;
+	/* if the packet output starts (first PES) with the first packet of a SAP AU (used when dashing), set to TRUE*/
 	Bool sap_inserted;
 	/*! SAP time (used when dashing)*/
 	u64 sap_time;
@@ -1860,7 +1942,7 @@ typedef enum
 \return packet produced or NULL if error or idle
 */
 const u8 *gf_m2ts_mux_process(GF_M2TS_Mux *muxer, GF_M2TSMuxState *status, u32 *usec_till_next);
-/*! gets the system clock of the multiplexer (time ellapsed since start)
+/*! gets the system clock of the multiplexer (time elapsed since start)
 \param muxer the target MPEG-2 TS multiplexer
 \return system clock of the multiplexer in milliseconds
 */

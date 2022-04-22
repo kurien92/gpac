@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2017
+ *			Copyright (c) Telecom ParisTech 2005-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / MPEG Program Stream demuxer filter
@@ -133,7 +133,7 @@ static void m2psdmx_setup(GF_Filter *filter, GF_M2PSDmxCtx *ctx)
 
 		gf_filter_pid_set_property(st->opid, GF_PROP_PID_BITRATE, &PROP_UINT((u32) mpeg2ps_get_video_stream_bitrate(ctx->ps, i) ) );
 
-		gf_filter_pid_set_property(st->opid, GF_PROP_PID_PLAYBACK_MODE, &PROP_UINT(GF_PLAYBACK_MODE_SEEK ) );
+		gf_filter_pid_set_property(st->opid, GF_PROP_PID_PLAYBACK_MODE, &PROP_UINT(GF_PLAYBACK_MODE_FASTFORWARD ) );
 	}
 
 	nb_streams = mpeg2ps_get_audio_stream_count(ctx->ps);
@@ -193,7 +193,7 @@ static void m2psdmx_setup(GF_Filter *filter, GF_M2PSDmxCtx *ctx)
 		gf_filter_pid_set_property(st->opid, GF_PROP_PID_UNFRAMED, &PROP_BOOL( GF_TRUE ) );
 		gf_filter_pid_set_property_str(st->opid, "nocts", &PROP_BOOL(GF_TRUE ));
 
-		gf_filter_pid_set_property(st->opid, GF_PROP_PID_PLAYBACK_MODE, &PROP_UINT(GF_PLAYBACK_MODE_SEEK ) );
+		gf_filter_pid_set_property(st->opid, GF_PROP_PID_PLAYBACK_MODE, &PROP_UINT(GF_PLAYBACK_MODE_FASTFORWARD ) );
 	}
 }
 
@@ -208,7 +208,8 @@ GF_Err m2psdmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 		ctx->ipid = NULL;
 		while (gf_list_count(ctx->streams) ) {
 			M2PSStream *st = gf_list_pop_back(ctx->streams);
-			gf_filter_pid_remove(st->opid);
+			if (st->opid)
+				gf_filter_pid_remove(st->opid);
 			gf_free(st);
 		}
 		return GF_OK;
@@ -379,8 +380,10 @@ GF_Err m2psdmx_process(GF_Filter *filter)
 			if (st->last_dts == dts) dts++;;
 			st->last_dts = dts;
 
-			if ((buf[buf_len - 4] == 0) && (buf[buf_len - 3] == 0) && (buf[buf_len - 2] == 1)) buf_len -= 4;
+			if ((buf_len>4) && (buf[buf_len - 4] == 0) && (buf[buf_len - 3] == 0) && (buf[buf_len - 2] == 1)) buf_len -= 4;
 			dst_pck = gf_filter_pck_new_alloc(st->opid, buf_len, &pck_data);
+			if (!dst_pck) continue;
+
 			memcpy(pck_data, buf, buf_len);
 			if (ftype==1) gf_filter_pck_set_sap(dst_pck, GF_FILTER_SAP_1);
 
@@ -403,6 +406,8 @@ GF_Err m2psdmx_process(GF_Filter *filter)
 				continue;
 			}
 			dst_pck = gf_filter_pck_new_alloc(st->opid, buf_len, &pck_data);
+			if (!dst_pck) continue;
+			
 			memcpy(pck_data, buf, buf_len);
 			if (cts != GF_FILTER_NO_TS) {
 				cts -= ctx->first_dts;
@@ -466,8 +471,8 @@ static const GF_FilterCapability M2PSDmxCaps[] =
 
 GF_FilterRegister M2PSDmxRegister = {
 	.name = "m2psdmx",
-	GF_FS_SET_DESCRIPTION("MPEG PS demuxer")
-	GF_FS_SET_HELP("This filter demultiplexes MPEG-2 program stream files/data to produce media PIDs and frames.")
+	GF_FS_SET_DESCRIPTION("MPEG PS demultiplexer")
+	GF_FS_SET_HELP("This filter demultiplexes MPEG-2 program streams to produce media PIDs and frames.")
 	.private_size = sizeof(GF_M2PSDmxCtx),
 	.initialize = m2psdmx_initialize,
 	.finalize = m2psdmx_finalize,

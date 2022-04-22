@@ -2,7 +2,7 @@
 *			GPAC - Multimedia Framework C SDK
 *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2021
 *					All rights reserved
 *
 *  This file is part of GPAC / openjpeg2k decoder filter
@@ -78,8 +78,10 @@ static GF_Err j2kdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 	GF_J2KCtx *ctx = gf_filter_get_udta(filter);
 
 	if (is_remove) {
-		if (ctx->opid) gf_filter_pid_remove(ctx->opid);
-		ctx->opid = NULL;
+		if (ctx->opid) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
 		ctx->ipid = NULL;
 		return GF_OK;
 	}
@@ -171,6 +173,7 @@ static GF_Err j2kdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 	if (ctx->pixel_format) {
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STRIDE, &PROP_UINT( (ctx->pixel_format == GF_PIXEL_YUV) ? ctx->width : ctx->width * ctx->nb_comp) );
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_PIXFMT, &PROP_UINT(ctx->pixel_format) );
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_RANGE, &PROP_BOOL(GF_TRUE) );
 	}
 	return GF_OK;
 }
@@ -453,6 +456,7 @@ static GF_Err j2kdec_process(GF_Filter *filter)
 #endif
 
 	pck_dst = gf_filter_pck_new_alloc(ctx->opid, ctx->out_size, &buffer);
+	if (!pck_dst) return GF_OUT_OF_MEM;
 
 	w = image->comps[0].w;
 	wr = int_ceildivpow2(image->comps[0].w, image->comps[0].factor);
@@ -563,6 +567,7 @@ static GF_Err j2kdec_process(GF_Filter *filter)
 		gf_filter_pck_discard(pck_dst);
 	} else {
 		gf_filter_pck_merge_properties(pck, pck_dst);
+		gf_filter_pck_set_dependency_flags(pck_dst, 0);
 		gf_filter_pck_send(pck_dst);
 	}
 	gf_filter_pid_drop_packet(ctx->ipid);

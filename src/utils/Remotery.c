@@ -49,7 +49,7 @@
 #define RMT_IMPL
 #include <gpac/tools.h>
 
-#ifdef RMT_PLATFORM_WINDOWS
+#if defined(RMT_PLATFORM_WINDOWS) && !defined(__GNUC__)
   #pragma comment(lib, "ws2_32.lib")
 #endif
 
@@ -946,7 +946,7 @@ static rmtError VirtualMirrorBuffer_Constructor(VirtualMirrorBuffer* buffer, rmt
         return RMT_ERROR_VIRTUAL_MEMORY_BUFFER_FAIL;
 
     // Set the file size to twice the buffer size
-    // TODO: this 2x behaviour can be avoided with similar solution to Win/Mac
+    // TODO: this 2x behavior can be avoided with similar solution to Win/Mac
     if (ftruncate (file_descriptor, size * 2))
         return RMT_ERROR_VIRTUAL_MEMORY_BUFFER_FAIL;
 
@@ -3574,7 +3574,12 @@ static rmtU32 rmtMessageQueue_SizeForPayload(rmtU32 payload_size)
 {
     // Add message header and align for ARM platforms
     rmtU32 size = sizeof(Message) + payload_size;
+#ifdef GPAC_64_BITS
+    size = (size + 7) & ~7U;
+#else
     size = (size + 3) & ~3U;
+#endif
+
     return size;
 }
 
@@ -5242,7 +5247,7 @@ RMT_API Remotery* _rmt_GetGlobalInstance(void)
 
 static void SetDebuggerThreadName(const char* name)
 {
-    #ifdef RMT_PLATFORM_WINDOWS
+    #if defined(RMT_PLATFORM_WINDOWS) && !defined(__GNUC__)
         THREADNAME_INFO info;
         info.dwType = 0x1000;
         info.szName = name;

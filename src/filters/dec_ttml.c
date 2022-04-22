@@ -2,7 +2,7 @@
  *					GPAC Multimedia Framework
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2020
+ *			Copyright (c) Telecom ParisTech 2020-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / TTML decoder filter
@@ -41,7 +41,7 @@ typedef struct
 	//opts
 	char *script;
 	char *color, *font;
-	Float fontSize, lineSpacing, txtx, txty;
+	Float fontSize, lineSpacing;
 	u32 txtw, txth, valign;
 
 	GF_FilterPid *ipid, *opid;
@@ -63,7 +63,11 @@ typedef struct
 
 	GF_BitStream *subs_bs;
 	s32 notify_clock;
+	s32 txtx, txty;
+	u32 fsize, vp_w, vp_h;
 
+	s64 delay;
+	u32 timescale;
 } GF_TTMLDec;
 
 void ttmldec_update_size_info(GF_TTMLDec *ctx)
@@ -92,6 +96,8 @@ void ttmldec_update_size_info(GF_TTMLDec *ctx)
 	}
 
 	gf_sg_set_scene_size_info(ctx->scenegraph, w, h, GF_TRUE);
+	ctx->vp_w = w;
+	ctx->vp_h = h;
 
 	sprintf(szVB, "0 0 %d %d", w, h);
 	gf_node_get_attribute_by_tag(root, TAG_SVG_ATT_viewBox, GF_TRUE, GF_FALSE, &info);
@@ -148,11 +154,15 @@ void ttmldec_setup_scene(GF_TTMLDec *ctx)
 
 static GF_Err ttmldec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 {
+	const GF_PropertyValue *p;
 	GF_TTMLDec *ctx = (GF_TTMLDec *)gf_filter_get_udta(filter);
 
 	if (is_remove) {
-		if (ctx->opid) gf_filter_pid_remove(ctx->opid);
-		ctx->opid = ctx->ipid = NULL;
+		if (ctx->opid) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
+		ctx->ipid = NULL;
 		return GF_OK;
 	}
 	//TODO: we need to cleanup cap checking upon reconfigure
@@ -168,6 +178,11 @@ static GF_Err ttmldec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 	gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_TEXT));
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_RAW));
+
+	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DELAY);
+	ctx->delay = p ? p->value.longsint : 0;
+	p = gf_filter_pid_get_property(pid, GF_PROP_PID_TIMESCALE);
+	ctx->timescale = p ? p->value.longsint : 1000;
 
 	return GF_OK;
 }
@@ -243,10 +258,33 @@ JSContext *ttmldec_get_js_context(GF_TTMLDec *ctx)
 	JSContext *svg_script_get_context(GF_SceneGraph *sg);
 	JSContext *c = svg_script_get_context(sg);
 
+	if ((ctx->txtx != ctx->scene->compositor->subtx)
+		|| (ctx->txty != ctx->scene->compositor->subty)
+		|| (ctx->fsize != ctx->scene->compositor->subfs)
+	) {
+		ctx->txtx = ctx->scene->compositor->subtx;
+		ctx->txty = ctx->scene->compositor->subty;
+		ctx->fsize = ctx->scene->compositor->subfs;
+		ctx->update_args = GF_TRUE;
+	}
+
+
 	if (ctx->update_args) {
 		JSValue global = JS_GetGlobalObject(c);
 
-		JS_SetPropertyStr(c, global, "fontSize", JS_NewFloat64(c, ctx->fontSize));
+		u32 fs = MAX(ctx->fsize, ctx->fontSize);
+		u32 def_font_size = ctx->scene->compositor->subfs;
+		if (!def_font_size) {
+			if (ctx->vp_h > 2000) def_font_size = 80;
+			else if (ctx->vp_h > 700) def_font_size = 40;
+			else def_font_size = 20;
+		}
+
+		if (!fs || (def_font_size>fs)) {
+			fs = def_font_size;
+		}
+
+		JS_SetPropertyStr(c, global, "fontSize", JS_NewFloat64(c, fs));
 		JS_SetPropertyStr(c, global, "fontFamily", JS_NewString(c, ctx->font));
 		JS_SetPropertyStr(c, global, "textColor", JS_NewString(c, ctx->color));
 		JS_SetPropertyStr(c, global, "lineSpaceFactor", JS_NewFloat64(c, ctx->lineSpacing));
@@ -270,7 +308,7 @@ static GF_Err ttmldec_process(GF_Filter *filter)
 	const u8 *pck_data;
 	char *pck_alloc=NULL, *ttml_doc;
 	u64 cts;
-	u32 timescale, obj_time;
+	u32 obj_time;
 	u32 pck_size;
 	JSValue fun_val;
 	JSValue global;
@@ -305,9 +343,17 @@ static GF_Err ttmldec_process(GF_Filter *filter)
 		return GF_OK;
 
 	cts = gf_filter_pck_get_cts( pck );
-	timescale = gf_filter_pck_get_timescale(pck);
+	s64 delay = ctx->scene->compositor->subd;
+	if (delay)
+		delay = gf_timestamp_rescale_signed(delay, 1000, ctx->timescale);
+	delay += ctx->delay;
+
+	if (delay>=0) cts += delay;
+	else if (cts > -delay) cts -= -delay;
+	else cts = 0;
 
 	gf_odm_check_buffering(ctx->odm, ctx->ipid);
+	cts = gf_timestamp_to_clocktime(cts, ctx->timescale);
 
 	//we still process any frame before our clock time even when buffering
 	obj_time = gf_clock_time(ctx->odm->ck);
@@ -318,7 +364,7 @@ static GF_Err ttmldec_process(GF_Filter *filter)
 		fun_val = JS_GetPropertyStr(c, global, "on_ttml_clock");
 		if (JS_IsFunction(c, fun_val) ) {
 			JSValue ret, argv[1];
-			argv[0] = JS_NewInt64(c, obj_time);
+			argv[0] = JS_NewInt64(c, gf_clock_time_absolute(ctx->odm->ck) );
 
 			ret = JS_Call(c, fun_val, global, 1, argv);
 			if (JS_IsException(ret)) {
@@ -341,10 +387,9 @@ static GF_Err ttmldec_process(GF_Filter *filter)
 		if (e) return e;
 	}
 
-	if (cts * 1000 > obj_time * timescale) {
-		gf_sc_sys_frame_pending(ctx->scene->compositor, ((Double) cts / timescale), obj_time, filter);
+	if (!gf_sc_check_sys_frame(ctx->scene, ctx->odm, ctx->ipid, filter, cts))
 		return GF_OK;
-	}
+
 	pck_data = gf_filter_pck_get_data(pck, &pck_size);
 	subs = gf_filter_pck_get_property(pck, GF_PROP_PCK_SUBS);
 
@@ -363,16 +408,23 @@ static GF_Err ttmldec_process(GF_Filter *filter)
 				first = GF_FALSE;
 				if (subs_size>pck_size) {
 					gf_filter_pid_drop_packet(ctx->ipid);
-					GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[TTMLDec] Invalid subsample size %d for packet size %d\n", subs_size, pck_size));
+					GF_LOG(GF_LOG_ERROR, GF_LOG_CODING, ("[TTMLDec] Invalid subsample size %d for packet size %d\n", subs_size, pck_size));
 					return GF_NON_COMPLIANT_BITSTREAM;
 				}
-				pck_alloc = gf_malloc(sizeof(char)*subs_size+2);
+				pck_alloc = gf_malloc(sizeof(char)*(subs_size+2));
 				memcpy(pck_alloc, pck_data, sizeof(char)*subs_size);
 				pck_alloc[subs_size] = 0;
 				pck_alloc[subs_size+1] = 0;
 				ttml_doc = pck_alloc;
 			}
 		}
+	} else {
+		//we cannot assume the doc ends with 0
+		pck_alloc = gf_malloc(sizeof(char)*(pck_size+2));
+		memcpy(pck_alloc, ttml_doc, sizeof(char)*pck_size);
+		pck_alloc[pck_size] = 0;
+		pck_alloc[pck_size+1] = 0;
+		ttml_doc = pck_alloc;
 	}
 
 	GF_DOMParser *dom = gf_xml_dom_new();
@@ -396,7 +448,7 @@ static GF_Err ttmldec_process(GF_Filter *filter)
 
 		argv[1] = JS_NewInt64(c, obj_time);
 		scene_ck = gf_filter_pck_get_duration(pck);
-		scene_ck /= timescale;
+		scene_ck /= ctx->timescale;
 		argv[2] = JS_NewFloat64(c, scene_ck);
 
 		ret = JS_Call(c, fun_val, global, 3, argv);
@@ -479,16 +531,14 @@ void ttmldec_finalize(GF_Filter *filter)
 static const GF_FilterArgs TTMLDecArgs[] =
 {
 	{ OFFS(script), "location of TTML SVG JS renderer", GF_PROP_STRING, "$GSHARE/scripts/ttml-renderer.js", NULL, GF_FS_ARG_HINT_EXPERT},
-	{ OFFS(font), "font to use", GF_PROP_STRING, "SANS", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
-	{ OFFS(fontSize), "font size to use", GF_PROP_FLOAT, "20", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
-	{ OFFS(color), "color to use", GF_PROP_STRING, "white", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
+	{ OFFS(font), "font", GF_PROP_STRING, "SANS", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
+	{ OFFS(fontSize), "font size", GF_PROP_FLOAT, "20", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
+	{ OFFS(color), "text color", GF_PROP_STRING, "white", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
 	{ OFFS(valign), "vertical alignment\n"
 	"- bottom: align text at bottom of text area\n"
 	"- center: align text at center of text area\n"
 	"- top: align text at top of text area", GF_PROP_UINT, "bottom", "bottom|center|top", GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
 	{ OFFS(lineSpacing), "line spacing as scaling factor to font size", GF_PROP_FLOAT, "1.0", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
-	{ OFFS(txtx), "horizontal offset", GF_PROP_FLOAT, "5", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
-	{ OFFS(txty), "vertical offset", GF_PROP_FLOAT, "5", NULL, GF_FS_ARG_HINT_ADVANCED|GF_FS_ARG_UPDATE},
 	{ OFFS(txtw), "default width in standalone rendering", GF_PROP_UINT, "400", NULL, 0},
 	{ OFFS(txth), "default height in standalone rendering", GF_PROP_UINT, "200", NULL, 0},
 	{0}

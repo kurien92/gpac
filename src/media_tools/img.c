@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Media Tools sub-project
@@ -81,7 +81,7 @@ void gf_img_parse(GF_BitStream *bs, u32 *codecid, u32 *width, u32 *height, u8 **
 
 		/*get frame header FFC0*/
 		while (gf_bs_available(bs)) {
-			u32 w, h;
+			u32 w, h,length;
 			if (gf_bs_read_u8(bs) != 0xFF) continue;
 			if (!offset) offset = (u32)gf_bs_get_position(bs) - 1;
 
@@ -101,14 +101,16 @@ void gf_img_parse(GF_BitStream *bs, u32 *codecid, u32 *width, u32 *height, u8 **
 			case 0xCD:
 			case 0xCE:
 			case 0xCF:
-				gf_bs_skip_bytes(bs, 3);
+                length = gf_bs_read_u16(bs);
+                /*prec = */gf_bs_read_u8(bs);
 				h = gf_bs_read_int(bs, 16);
 				w = gf_bs_read_int(bs, 16);
+                nb_comp = gf_bs_read_int(bs, 8);
+                if (length != 8 + 3*nb_comp) continue;  //This is not the right marker
 				if ((w > *width) || (h > *height)) {
 					*width = w;
 					*height = h;
 				}
-				nb_comp = gf_bs_read_int(bs, 8);
 				break;
 			}
 		}
@@ -350,7 +352,7 @@ GF_Err gf_img_jpeg_dec(u8 *jpg, u32 jpg_size, u32 *width, u32 *height, u32 *pixe
 	}
 	if (jpx.cinfo.rec_outbuf_height>JPEG_MAX_SCAN_BLOCK_HEIGHT) {
 		jpeg_destroy_decompress(&jpx.cinfo);
-		GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[gf_img_jpeg_dec] : jpx.cinfo.rec_outbuf_height>JPEG_MAX_SCAN_BLOCK_HEIGHT\n"));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_CODING, ("[gf_img_jpeg_dec] : jpx.cinfo.rec_outbuf_height>JPEG_MAX_SCAN_BLOCK_HEIGHT\n"));
 		return GF_IO_ERR;
 	}
 

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2019
+ *			Copyright (c) Telecom ParisTech 2019-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / ProRes reframer filter
@@ -34,7 +34,7 @@ typedef struct
 {
 	//filter args
 	GF_Fraction fps;
-	Bool findex;
+	Bool findex, notime;
 	char *cid;
 
 	//only one input pid declared
@@ -67,6 +67,9 @@ typedef struct
 	/*frame index 0/NULL if findex is not set*/
 	u32 nb_frames;
 	u32 *frame_sizes;
+
+	u32 bitrate;
+	Bool copy_props;
 } GF_ProResDmxCtx;
 
 
@@ -77,7 +80,10 @@ GF_Err proresdmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_rem
 
 	if (is_remove) {
 		ctx->ipid = NULL;
-		gf_filter_pid_remove(ctx->opid);
+		if (ctx->opid) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
 		return GF_OK;
 	}
 	if (! gf_filter_pid_check_caps(pid))
@@ -92,7 +98,12 @@ GF_Err proresdmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_rem
 		gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, NULL);
 	}
-	if (ctx->timescale) {
+
+	//if source has no timescale, recompute time
+	if (!ctx->timescale) {
+		ctx->notime = GF_TRUE;
+	} else {
+		ctx->copy_props = GF_TRUE;
 		//if we have a FPS prop, use it
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_FPS);
 		if (p) ctx->cur_fps = p->value.frac;
@@ -105,7 +116,7 @@ static void proresdmx_check_dur(GF_Filter *filter, GF_ProResDmxCtx *ctx)
 {
 	FILE *stream;
 	GF_BitStream *bs;
-	u64 duration;
+	u64 duration, rate;
 	u32 idx_size;
 	const char *filepath=NULL;
 	const GF_PropertyValue *p;
@@ -124,18 +135,26 @@ static void proresdmx_check_dur(GF_Filter *filter, GF_ProResDmxCtx *ctx)
 	ctx->is_file = GF_TRUE;
 
 	if (ctx->findex==1) {
-		p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_DOWN_SIZE);
-		if (!p || (p->value.longuint > 100000000)) {
-			GF_LOG(GF_LOG_INFO, GF_LOG_PARSER, ("[ProResDmx] Source file larger than 100M, skipping indexing\n"));
-		} else {
+		if (gf_opts_get_bool("temp", "force_indexing")) {
 			ctx->findex = 2;
+		} else {
+			p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_DOWN_SIZE);
+			if (!p || (p->value.longuint > 100000000)) {
+				GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("[ProResDmx] Source file larger than 100M, skipping indexing\n"));
+			} else {
+				ctx->findex = 2;
+			}
 		}
 	}
 	if (!ctx->findex)
 		return;
 
-	stream = gf_fopen(filepath, "rb");
-	if (!stream) return;
+	stream = gf_fopen_ex(filepath, NULL, "rb", GF_TRUE);
+	if (!stream) {
+		if (gf_fileio_is_main_thread(p->value.string))
+			ctx->file_loaded = GF_TRUE;
+		return;
+	}
 
 	bs = gf_bs_from_file(stream, GF_BITSTREAM_READ);
 
@@ -143,9 +162,9 @@ static void proresdmx_check_dur(GF_Filter *filter, GF_ProResDmxCtx *ctx)
 	ctx->nb_frames = 0;
 	ctx->file_size = gf_bs_available(bs);
 
+	u64 frame_start = 0;
 	duration = 0;
 	while (gf_bs_available(bs)) {
-		u64 frame_start = gf_bs_get_position(bs);
 		u32 fsize = gf_bs_read_u32(bs);
 		u32 fmark = gf_bs_read_u32(bs);
 		gf_bs_seek(bs, frame_start + fsize);
@@ -159,7 +178,9 @@ static void proresdmx_check_dur(GF_Filter *filter, GF_ProResDmxCtx *ctx)
 		ctx->frame_sizes = gf_realloc(ctx->frame_sizes, sizeof(u32)*idx_size);
 		ctx->frame_sizes[ctx->nb_frames] = fsize;
 		ctx->nb_frames++;
+		frame_start += fsize;
 	}
+	rate = gf_bs_get_position(bs);
 	gf_bs_del(bs);
 	gf_fclose(stream);
 
@@ -168,8 +189,13 @@ static void proresdmx_check_dur(GF_Filter *filter, GF_ProResDmxCtx *ctx)
 		ctx->duration.den = ctx->cur_fps.num;
 
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DURATION, & PROP_FRAC64(ctx->duration));
+
+		if (duration && (!gf_sys_is_test_mode() || gf_opts_get_bool("temp", "force_indexing"))) {
+			rate *= 8 * ctx->duration.den;
+			rate /= ctx->duration.num;
+			ctx->bitrate = (u32) rate;
+		}
 	}
-	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CAN_DATAREF, & PROP_BOOL(GF_TRUE) );
 }
 
 
@@ -199,7 +225,7 @@ static Bool proresdmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt
 				ctx->findex = 2;
 				ctx->file_loaded = GF_FALSE;
 				ctx->duration.den = ctx->duration.num = 0;
-				GF_LOG(GF_LOG_INFO, GF_LOG_PARSER, ("[ProResDmx] Play request from %d, building index\n", ctx->start_range));
+				GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("[ProResDmx] Play request from %d, building index\n", ctx->start_range));
 				proresdmx_check_dur(filter, ctx);
 			}
 			if ((evt->play.speed<0) && (ctx->start_range<0)) {
@@ -242,6 +268,7 @@ static Bool proresdmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt
 	case GF_FEVT_STOP:
 		//don't cancel event
 		ctx->is_playing = GF_FALSE;
+		ctx->cts = 0;
 		return GF_FALSE;
 
 	case GF_FEVT_SET_SPEED:
@@ -295,7 +322,7 @@ static void proresdmx_check_pid(GF_Filter *filter, GF_ProResDmxCtx *ctx, GF_ProR
 
 #undef CHECK_CFG
 
-	if (same_cfg) return;
+	if (same_cfg && !ctx->copy_props) return;
 	fps.num = fps.den = 0;
 	switch (finfo->framerate_code) {
 	case 1: fps.num = 24000; fps.den = 1001; break;
@@ -327,11 +354,10 @@ static void proresdmx_check_pid(GF_Filter *filter, GF_ProResDmxCtx *ctx, GF_ProR
 	}
 
 	bitrate = 0;
-	if (ctx->nb_frames && ctx->file_size) {
-		u64 dur = ctx->nb_frames * ctx->cur_fps.den / ctx->cur_fps.num;
+	if (ctx->nb_frames && ctx->file_size && ctx->cur_fps.den) {
 		bitrate = ctx->file_size * 8;
-		bitrate /= dur;
-		bitrate /= 1000000;
+		bitrate *= ctx->cur_fps.num;
+		bitrate /= ctx->nb_frames * ctx->cur_fps.den;
 	}
 	memcpy(&ctx->cur_cfg, finfo, sizeof(GF_ProResFrameInfo));
 	if (ctx->cid && (strlen(ctx->cid)>4)) {
@@ -342,6 +368,7 @@ static void proresdmx_check_pid(GF_Filter *filter, GF_ProResDmxCtx *ctx, GF_ProR
 		codec_id = GF_CODECID_APCH;
 	}
 
+	ctx->copy_props = GF_FALSE;
 	//copy properties at init or reconfig
 	gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, & PROP_UINT(GF_STREAM_VISUAL));
@@ -381,6 +408,12 @@ static void proresdmx_check_pid(GF_Filter *filter, GF_ProResDmxCtx *ctx, GF_ProR
 
 	if (ctx->duration.num)
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DURATION, & PROP_FRAC64(ctx->duration));
+	if (!ctx->timescale)
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CAN_DATAREF, & PROP_BOOL(GF_TRUE ) );
+
+	if (ctx->bitrate) {
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_BITRATE, & PROP_UINT(ctx->bitrate));
+	}
 
 	/*prores is all intra, we support rewind*/
 	if (ctx->is_file && ctx->findex) {
@@ -549,7 +582,7 @@ GF_Err proresdmx_process(GF_Filter *filter)
 			if (e) return e;
 		}
 
-		//begining of a new frame
+		//beginning of a new frame
 		cts = gf_filter_pck_get_cts(pck);
 		if (cts != GF_FILTER_NO_TS)
 			ctx->cts = cts;
@@ -636,8 +669,8 @@ static const GF_FilterArgs ProResDmxArgs[] =
 {
 	{ OFFS(fps), "import frame rate (0 default to FPS from bitstream or 25 Hz)", GF_PROP_FRACTION, "0/1000", NULL, 0},
 	{ OFFS(findex), "index frames. If true, filter will be able to work in rewind mode", GF_PROP_BOOL, "true", NULL, 0},
-
-	{ OFFS(cid), "set QT 4CC for the imported media. If not set, defaults to 'ap4h' for YUV444 or 'apch' for YUV422", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(cid), "set QT 4CC for the imported media. If not set, default is 'ap4h' for YUV444 and 'apch' for YUV422", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(notime), "ignore input timestamps, rebuild from 0", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{0}
 };
 

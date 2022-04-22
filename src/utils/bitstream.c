@@ -73,11 +73,17 @@ struct __tag_bitstream
 	u8 *cache_read;
 	u32 cache_read_size, cache_read_pos, cache_read_alloc;
 
+	void (*on_log)(void *udta, const char *field_name, u32 nb_bits, u64 field_val, s32 idx1, s32 idx2, s32 idx3);
+	void *log_udta;
+
+	u32 total_bits_read;
+	u32 overflow_state;
 };
 
 GF_Err gf_bs_reassign_buffer(GF_BitStream *bs, const u8 *buffer, u64 BufferSize)
 {
 	if (!bs) return GF_BAD_PARAM;
+	bs->total_bits_read = 0;
 	if (bs->bsmode == GF_BITSTREAM_READ) {
 		bs->original = (char*)buffer;
 		bs->size = BufferSize;
@@ -350,6 +356,7 @@ static u8 BS_ReadByte(GF_BitStream *bs)
 		u8 res;
 		if (bs->position >= bs->size) {
 			if (bs->EndOfStream) bs->EndOfStream(bs->par);
+			if (!bs->overflow_state) bs->overflow_state = 1;
 			return 0;
 		}
 		res = bs->original[bs->position++];
@@ -368,9 +375,12 @@ static u8 BS_ReadByte(GF_BitStream *bs)
 		bs_flush_write_cache(bs);
 
 	is_eos = gf_feof(bs->stream);
+	//cache not fully read, reset EOS
+	if (bs->cache_read && (bs->cache_read_pos<bs->cache_read_size))
+		is_eos = GF_FALSE;
 
 	/*we are in FILE mode, test for end of file*/
-	if (!is_eos || bs->cache_read) {
+	if (!is_eos) {
 		u8 res;
 		Bool loc_eos=GF_FALSE;
 		assert(bs->position<=bs->size);
@@ -399,8 +409,12 @@ static u8 BS_ReadByte(GF_BitStream *bs)
 bs_eof:
 	if (bs->EndOfStream) {
 		bs->EndOfStream(bs->par);
+		if (!bs->overflow_state) bs->overflow_state = 1;
 	} else {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[BS] Attempt to overread bitstream\n"));
+		if (!bs->overflow_state) {
+			bs->overflow_state = 1;
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[BS] Attempt to overread bitstream\n"));
+		}
 	}
 	assert(bs->position <= 1+bs->size);
 	return 0;
@@ -438,6 +452,7 @@ GF_EXPORT
 u32 gf_bs_read_int(GF_BitStream *bs, u32 nBits)
 {
 	u32 ret;
+	bs->total_bits_read+= nBits;
 
 #ifndef NO_OPTS
 	if (nBits + bs->nbBits <= 8) {
@@ -603,7 +618,24 @@ u64 gf_bs_read_long_int(GF_BitStream *bs, u32 nBits)
 {
 	u64 ret = 0;
 	if (nBits>64) {
-		gf_bs_read_long_int(bs, nBits-64);
+		u32 skip = nBits-64;
+		if (gf_bs_available(bs) * 8 < nBits-8) {
+			if (bs->EndOfStream) bs->EndOfStream(bs->par);
+			bs->position = bs->size;
+			if (!bs->overflow_state) bs->overflow_state = 1;
+			return 0;
+		}
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Reading %d bits but max should be 64, skipping %d most significants bits\n", nBits, nBits-64));
+		//avoid recursion
+		while (skip) {
+			if (skip>32) {
+				gf_bs_read_int(bs, 32);
+				skip-=32;
+			} else {
+				gf_bs_read_int(bs, skip);
+				skip=0;
+			}
+		}
 		ret = gf_bs_read_long_int(bs, 64);
 	} else {
 		while (nBits-- > 0) {
@@ -1130,7 +1162,7 @@ GF_EXPORT
 void gf_bs_get_content_no_truncate(GF_BitStream *bs, u8 **output, u32 *outSize, u32 *alloc_size)
 {
 	/*only in WRITE MEM mode*/
-	if (bs->bsmode != GF_BITSTREAM_WRITE_DYN) return;
+	if (!bs || bs->bsmode != GF_BITSTREAM_WRITE_DYN) return;
 
 	if (bs->on_block_out && bs->position>bs->bytes_out) {
 		bs->on_block_out(bs->usr_data, bs->original, (u32) (bs->position - bs->bytes_out) );
@@ -1201,16 +1233,26 @@ void gf_bs_skip_bytes(GF_BitStream *bs, u64 nbBytes)
 			bs->position += csize;
 			bs->cache_read_pos = bs->cache_read_size;
 		}
-		//weird msys2 bug resulting in broken seek on some files ?!?  -the big is not happening when doing absolute seek
+		//weird msys2 bug resulting in broken seek on some files ?!?  -the bug is not happening when doing absolute seek
 //		gf_fseek(bs->stream, nbBytes, SEEK_CUR);
 		bs->position += nbBytes;
+		if (bs->bsmode == GF_BITSTREAM_FILE_READ) {
+			if (bs->position > bs->size) bs->position = bs->size;
+		}
 		gf_fseek(bs->stream, bs->position, SEEK_SET);
 		return;
 	}
 
 	/*special case for reading*/
 	if (bs->bsmode == GF_BITSTREAM_READ) {
-		bs->position += nbBytes;
+		if (bs->remove_emul_prevention_byte) {
+			while (nbBytes) {
+				gf_bs_read_u8(bs);
+				nbBytes--;
+			}
+		} else {
+			bs->position += nbBytes;
+		}
 		return;
 	}
 	/*for writing we must do it this way, otherwise pb in dynamic buffers*/
@@ -1292,6 +1334,7 @@ static GF_Err BS_SeekIntern(GF_BitStream *bs, u64 offset)
 GF_EXPORT
 GF_Err gf_bs_seek(GF_BitStream *bs, u64 offset)
 {
+	bs->overflow_state = 0;
 	if (bs->on_block_out) {
 		GF_Err e;
 		if (offset < bs->bytes_out) {
@@ -1379,8 +1422,12 @@ u64 gf_bs_get_refreshed_size(GF_BitStream *bs)
 GF_EXPORT
 u64 gf_bs_get_size(GF_BitStream *bs)
 {
-	if (bs->cache_write)
-		return bs->size + bs->buffer_written;
+	if (bs->cache_write) {
+		if (bs->size == bs->position)
+			return bs->size + bs->buffer_written;
+		else
+			return bs->size;
+	}
 	if (bs->on_block_out)
 		return bs->position;
 	return bs->size;
@@ -1652,3 +1699,29 @@ exit:
 	return GF_IO_ERR;
 }
 
+
+GF_Err gf_bs_set_logger(GF_BitStream *bs, void (*on_bs_log)(void *udta, const char *field_name, u32 nb_bits, u64 field_val, s32 idx1, s32 idx2, s32 idx3), void *udta)
+{
+	if (!bs) return GF_BAD_PARAM;
+	bs->on_log = on_bs_log;
+	bs->log_udta = udta;
+	return GF_OK;
+}
+
+#ifndef GPAC_DISABLE_AVPARSE_LOGS
+void gf_bs_log_idx(GF_BitStream *bs, u32 nBits, const char *fname, s64 val, s32 idx1, s32 idx2, s32 idx3)
+{
+	assert(bs);
+	if (bs->on_log) bs->on_log(bs->log_udta, fname, nBits, val, idx1, idx2, idx3);
+}
+#endif
+
+
+void gf_bs_mark_overflow(GF_BitStream *bs, Bool reset)
+{
+	bs->overflow_state = reset ? 0 : 2;
+}
+u32 gf_bs_is_overflow(GF_BitStream *bs)
+{
+	return bs->overflow_state;
+}

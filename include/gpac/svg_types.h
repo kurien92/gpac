@@ -110,6 +110,7 @@ enum {
 	SMIL_Accumulate_datatype,
 	SMIL_Restart_datatype,
 	SMIL_Fill_datatype,
+	SVG_ClipPath_datatype,
 
 	SVG_LAST_U8_PROPERTY,
 
@@ -176,6 +177,9 @@ enum {
 	LASeR_Size_datatype,
 
 	SVG_Matrix2D_datatype,
+
+	/*internal type for node list*/
+	SVG_NodeList_datatype
 };
 
 //! @cond Doxygen_Suppress
@@ -378,7 +382,7 @@ typedef struct __xml_ri {
 } XMLRI;
 
 /*! XML IDREF object
-	Note: the same structure is used to watch for IDREF changes (LASeR node replace)
+	\note the same structure is used to watch for IDREF changes (LASeR node replace)
 */
 typedef struct __xml_ri XML_IDREF;
 
@@ -894,7 +898,7 @@ enum {
 /*! DOM Event phase*/
 typedef u8 XMLEV_Phase;
 
-/*! SMIL sync behaviour types */
+/*! SMIL sync behavior types */
 enum {
 	SMIL_SYNCBEHAVIOR_INHERIT		= 0,
 	/*LASeR order*/
@@ -903,7 +907,7 @@ enum {
 	SMIL_SYNCBEHAVIOR_INDEPENDENT,
 	SMIL_SYNCBEHAVIOR_LOCKED,
 };
-/*! SMIL sync behaviour*/
+/*! SMIL sync behavior*/
 typedef u8 SMIL_SyncBehavior;
 
 /*! SMIL sync tolerance types */
@@ -977,7 +981,7 @@ enum {
 /*! SVG initial visibility*/
 typedef u8 SVG_InitialVisibility;
 
-/*! SVG transform behaviour types */
+/*! SVG transform behavior types */
 enum {
 	SVG_TRANSFORMBEHAVIOR_GEOMETRIC = 0,
 	SVG_TRANSFORMBEHAVIOR_PINNED,
@@ -985,7 +989,7 @@ enum {
 	SVG_TRANSFORMBEHAVIOR_PINNED270,
 	SVG_TRANSFORMBEHAVIOR_PINNED90,
 };
-/*! SVG transform behaviour*/
+/*! SVG transform behavior*/
 typedef u8 SVG_TransformBehavior;
 
 /*! SVG overlay types */
@@ -1025,6 +1029,12 @@ enum {
 };
 /*! SVG spread method*/
 typedef u8 SVG_SpreadMethod;
+
+/*! SVG clip-path attribute*/
+typedef struct
+{
+	XMLRI target;
+} SVG_ClipPath;
 
 /*! LASeR choice types */
 enum {

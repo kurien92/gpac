@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2017
+ *			Copyright (c) Telecom ParisTech 2005-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / LASeR decoder filter
@@ -76,7 +76,8 @@ static GF_Err lsrdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 		out_pid = gf_filter_pid_get_udta(pid);
 		if (ctx->out_pid==out_pid)
 			ctx->out_pid = NULL;
-		gf_filter_pid_remove(out_pid);
+		if (out_pid)
+			gf_filter_pid_remove(out_pid);
 		ctx->nb_streams--;
 		if (ctx->codec && ESID) {
 			return gf_laser_decoder_remove_stream(ctx->codec, ESID);
@@ -153,9 +154,7 @@ static GF_Err lsrdec_process(GF_Filter *filter)
 	GF_FilterPacket *pck;
 	const char *data;
 	u32 size, ESID=0;
-	Double ts_offset;
 	u64 now, cts;
-	u32 obj_time;
 	u32 i, count;
 	const GF_PropertyValue *prop;
 	GF_LSRDecCtx *ctx = gf_filter_get_udta(filter);
@@ -201,24 +200,16 @@ static GF_Err lsrdec_process(GF_Filter *filter)
 		if (prop) ESID = prop->value.uint;
 
 		cts = gf_filter_pck_get_cts( pck );
-		ts_offset = (Double) cts;
-		ts_offset /= gf_filter_pck_get_timescale(pck);
+		cts = gf_timestamp_to_clocktime(cts, gf_filter_pck_get_timescale(pck));
 
-		gf_odm_check_buffering(odm, pid);
-
-
-		//we still process any frame before our clock time even when buffering
-		obj_time = gf_clock_time(odm->ck);
-		if (ts_offset * 1000 > obj_time) {
-			gf_sc_sys_frame_pending(ctx->scene->compositor, ts_offset, obj_time, filter);
+		if (!gf_sc_check_sys_frame(scene, odm, pid, filter, cts))
 			continue;
-		}
 
 		now = gf_sys_clock_high_res();
 		e = gf_laser_decode_au(ctx->codec, ESID, data, size);
 		now = gf_sys_clock_high_res() - now;
 
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[BIFS] ODM%d #CH%d at %d decoded AU TS %u in "LLU" us\n", odm->ID, ESID, obj_time, cts, now));
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[BIFS] ODM%d #CH%d at %d decoded AU TS %u in "LLU" us\n", odm->ID, ESID, cts, now));
 
 		gf_filter_pid_drop_packet(pid);
 
@@ -226,6 +217,17 @@ static GF_Err lsrdec_process(GF_Filter *filter)
 		if (odm == ctx->odm)
 			gf_scene_attach_to_compositor(scene);
 	}
+	return GF_OK;
+}
+
+static GF_Err lsrdec_initialize(GF_Filter *filter)
+{
+#ifdef GPAC_ENABLE_COVERAGE
+	if (gf_sys_is_cov_mode()) {
+		gf_svg_get_system_paint_server_type("");
+		gf_svg_get_system_paint_server_name(0);
+	}
+#endif
 	return GF_OK;
 }
 
@@ -249,11 +251,13 @@ static const GF_FilterCapability LSRDecCaps[] =
 GF_FilterRegister LSRDecRegister = {
 	.name = "lsrdec",
 	GF_FS_SET_DESCRIPTION("MPEG-4 LASeR decoder")
-	GF_FS_SET_HELP("This filter decodes MPEG-4 LASeR frames directly into the scene graph of the compositor. It cannot be used to dump LASeR content.")
+	GF_FS_SET_HELP("This filter decodes MPEG-4 LASeR binary frames directly into the scene graph of the compositor.\n"
+	"Note: This filter cannot be used to dump LASeR content to text or xml, use `MP4Box` for that.")
 	.private_size = sizeof(GF_LSRDecCtx),
 	.flags = GF_FS_REG_MAIN_THREAD,
 	.priority = 1,
 	SETCAPS(LSRDecCaps),
+	.initialize = lsrdec_initialize,
 	.finalize = lsrdec_finalize,
 	.process = lsrdec_process,
 	.configure_pid = lsrdec_configure_pid,

@@ -31,7 +31,7 @@ extension = {
     time_in_tsb: 0,
     muted: 0,
     file_open_dlg: false,
-    stoped_url: null,
+    stopped_url: null,
     initial_service_id: 0,
     default_addon: null,
     history: [],
@@ -191,7 +191,9 @@ extension = {
                         scene.exit(1);                    
                     }
 
-                    var notif = gw_new_message(null, 'Error opening file!', 'Failed to open ' + this.url[0] + '\n\nReason: ' + Sys.error_string(evt.error));
+                    var url = this.url[0];
+                    if (url.startsWith('gpac://')) url = url.slice(7);
+                    var notif = gw_new_message(null, 'Error opening file!', 'Failed to open "' + url + '"\n\n' + Sys.error_string(evt.error));
                     notif.show();
 
                     var url = ext.movie.children[0].url.length ? ext.movie.children[0].url[0] : '';
@@ -249,7 +251,6 @@ extension = {
                 } else {
                     ext.local_url = false;
                 }
-
                 ext.root_odm = scene.get_object_manager(ext.current_url);
                 ext.reverse_playback_supported = ext.root_odm.reverse_playback_supported;
 
@@ -292,8 +293,9 @@ extension = {
                 //force display size notif on controler to trigger resize of the window
                 ext.controler.on_display_size(ext.controler.width, ext.controler.height);
             }
-
-//            ext.root_odm = scene.get_object_manager(ext.current_url);
+            //when doing stop + play
+            if (!ext.root_odm)
+                ext.root_odm = scene.get_object_manager(ext.current_url);
             ext.set_state(ext.GF_STATE_PLAY);
 
             //override scene size info
@@ -304,11 +306,22 @@ extension = {
                 w = evt.width;
                 h = evt.height;
 
-                if (w > scene.screen_width) w = scene.screen_width;
-                if (h > scene.screen_height) h = scene.screen_height;
+                if (w > scene.screen_width) {
+					h *= scene.screen_width;
+					h /= w;
+					w = scene.screen_width;
+                }
+                if (h > scene.screen_height) {
+					w *= scene.screen_height;
+					w /= h;
+					h = scene.screen_height;
+				}
 
-				if (w<this.extension.def_width)
+				if (w<this.extension.def_width) {
+                    h *= this.extension.def_width;
+                    h /= w;
                     w = this.extension.def_width;
+				}
 
                 gwlog(l_deb, 'set output size to ' + w + 'x' + h);
                 scene.set_size(w, h);
@@ -352,8 +365,6 @@ extension = {
         this.movie.children[0].on_media_progress = function (evt) {
             if (evt.buffering) {
                 this.extension.show_buffer(evt.bufferLevel);
-                this.extension.controler.layout();
-
             }
             if (evt.total) {
                 var percent_dload = 100 * evt.loaded / evt.total;
@@ -393,6 +404,7 @@ extension = {
                     this.extension.playlist_next();
                 } else {
                     this.extension.set_state(this.extension.GF_STATE_STOP);
+                    this.extension.set_time(0);
                 }
             }
         }
@@ -991,12 +1003,15 @@ extension = {
 		
         if (!this.movie) {
             this.init_extension();
-
             //check our args
             var i;
-            var url_arg = null;
+            //get URL when loading compositor in GUI mode with src option set
+            var url_arg = scene.get_option('temp', 'gui_load_url');
             var prog_name = Sys.args[0]; 
             var check_gpac_args = 1;
+            if (url_arg && (url_arg.indexOf('://') < 0) )
+                url_arg = 'gpac://' + url_arg;
+
             //check mp4client or MP4Client
             if (prog_name && (prog_name.indexOf('lient')>=0))
                 check_gpac_args = 0;
@@ -1300,8 +1315,11 @@ extension = {
         if (state == this.state) return;
 
         if (state == this.GF_STATE_STOP) {
-            if (this.stats_wnd) this.stats_wnd.close_all();
-            this.stoped_url = '' + this.current_url;
+            if (this.stats_wnd) {
+                this.stats_wnd.close_all();
+                this.stats_wnd = null;
+            }
+            this.stopped_url = '' + this.current_url;
             if (this.controlled_renderer) this.controlled_renderer.Stop();
             else {
                 this.set_movie_url('');
@@ -1311,6 +1329,8 @@ extension = {
             this.movie_control.mediaStartTime = 0;
             this.controler.media_line.set_value(0);
             this.controler.play.switch_icon(this.icon_play);
+            this.controler.media_list.hide();
+            this.controler.channels.hide();
             this.state = this.GF_STATE_STOP;
             this.set_speed(1);
             this.stats_resources = [];
@@ -1339,13 +1359,13 @@ extension = {
 			return;
         }
         //we are playing, resume from stop if needed
-        if (this.stoped_url) {
+        if (this.stopped_url) {
             if (this.controlled_renderer) {
                 this.controlled_renderer.Play();
             } else {
-                this.set_movie_url(this.stoped_url, true);
+                this.set_movie_url(this.stopped_url, true);
             }
-            this.stoped_url = null;
+            this.stopped_url = null;
             //not in trick mode, next pause/play will restart from current time
             if (state != this.GF_STATE_TRICK)
                 this.movie_control.mediaStartTime = -1;
@@ -1429,7 +1449,7 @@ extension = {
 
             this.default_addon = null;
             this.root_odm = null;
-            this.stoped_url = null;
+            this.stopped_url = null;
 
             /*create a temp inline holding the previous scene, use it as the main movie and use the old inline to test the resource. 
             This avoids messing up with event targets already setup*/
@@ -1612,7 +1632,6 @@ extension = {
         this.services = [];
 
         var root_odm = this.root_odm;
-
         if (root_odm) {
             for (var res_i = 0; res_i < root_odm.nb_resources; res_i++) {
                 var m = root_odm.get_resource(res_i);
@@ -1715,11 +1734,14 @@ extension = {
 			} ) (extension);
 
 			wnd.make_item = function (text, obj) {
-				wnd.add_menu_item(text, function () {
-								  obj.select()
-								  });
+                let pref = "";
+                if (m.status == 'Playing') pref= "* ";
+                else if (m.status == 'Paused') pref= "* ";
+				wnd.add_menu_item(pref+text, function () {
+				  obj.select();
+			  });
 			}
-			
+
 			for (var res_i = 0; res_i < root_odm.nb_resources; res_i++) {
 				var m = root_odm.get_resource(res_i);
 				if (root_odm.selected_service != m.service_id) continue;
@@ -1728,10 +1750,10 @@ extension = {
 					var text = 'Video #'+m.id;
 					wnd.make_item(text, m);
 				} else if (m.type=='Audio' && (nb_audio>1)) {
-					var text = 'Audio '+m.lang;
+					var text = 'Audio ('+m.lang+')';
 					wnd.make_item(text, m);
-				} else if (m.type=='Text' && (nb_subs>1)) {
-					var text = 'Subtitle '+m.lang;
+				} else if (m.type=='Text') {
+					var text = 'Subtitle ('+m.lang+')';
 					wnd.make_item(text, m);
 				}
 			}

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2019-2020
+ *			Copyright (c) Telecom ParisTech 2019-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / rtp output filter
@@ -108,7 +108,7 @@ GF_Err rtpout_create_sdp(GF_List *streams, Bool is_rtsp, const char *ip, const c
 		gf_fprintf(sdp_out, "i=%s\n", info);
 	} else {
 		GF_RTPOutStream *stream = gf_list_get(streams, 0);
-		const char *src = gf_filter_pid_orig_src_args(stream->pid);
+		const char *src = gf_filter_pid_orig_src_args(stream->pid, GF_FALSE);
 		if (!src) src = gf_filter_pid_get_source_filter_name(stream->pid);
 		else {
 			src = gf_file_basename(src);
@@ -128,7 +128,7 @@ GF_Err rtpout_create_sdp(GF_List *streams, Bool is_rtsp, const char *ip, const c
 	gf_fprintf(sdp_out, "t=0 0\n");
 
 	if (is_rtsp) {
-		gf_fprintf(sdp_out, "a=control=*\n");
+		gf_fprintf(sdp_out, "a=control:*\n");
 	}
 
 	if (gf_sys_is_test_mode()) {
@@ -146,13 +146,14 @@ GF_Err rtpout_create_sdp(GF_List *streams, Bool is_rtsp, const char *ip, const c
 			if (!stream->rtp) continue;
 
 			p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_DURATION);
-			if (p) {
+			if (p && p->value.lfrac.den) {
 				Double dur = (Double) p->value.lfrac.num;
+				if (dur<0) dur = -dur;
 				dur /= p->value.lfrac.den;
 				if (dur>max_dur) max_dur = dur;
 			}
 			p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_PLAYBACK_MODE);
-			if (!p || (p->value.uint<GF_PLAYBACK_MODE_SEEK))
+			if (!p || (p->value.uint<GF_PLAYBACK_MODE_FASTFORWARD))
 				disable_seek = GF_TRUE;
 		}
 
@@ -182,6 +183,7 @@ GF_Err rtpout_create_sdp(GF_List *streams, Bool is_rtsp, const char *ip, const c
 		s16 tl;
 		u32 dsi_len = 0;
 		u32 dsi_enh_len = 0;
+		u32 nb_chan = 0;
         const GF_PropertyValue *p;
 		GF_RTPOutStream *stream = gf_list_get(streams, i);
 		if (!stream->rtp) continue;
@@ -208,6 +210,9 @@ GF_Err rtpout_create_sdp(GF_List *streams, Bool is_rtsp, const char *ip, const c
 		p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_HEIGHT);
 		if (p) h = p->value.uint;
 
+		p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_NUM_CHANNELS);
+		if (p) nb_chan = p->value.uint;
+
 		p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_PROTECTION_KMS_URI);
 		if (p) KMS = p->value.string;
 
@@ -228,7 +233,7 @@ GF_Err rtpout_create_sdp(GF_List *streams, Bool is_rtsp, const char *ip, const c
 			if (p) h = p->value.uint;
 		}
 
-		gf_rtp_streamer_append_sdp_extended(stream->rtp, stream->id, dsi, dsi_len, dsi_enh, dsi_enh_len, (char *)KMS, w, h, tw, th, tx, ty, tl, is_rtsp, &sdp_media);
+		gf_rtp_streamer_append_sdp_extended(stream->rtp, stream->id, dsi, dsi_len, dsi_enh, dsi_enh_len, (char *)KMS, w, h, tw, th, tx, ty, tl, nb_chan, is_rtsp, &sdp_media);
 
 		if (sdp_media) {
 			gf_fprintf(sdp_out, "%s", sdp_media);
@@ -238,16 +243,26 @@ GF_Err rtpout_create_sdp(GF_List *streams, Bool is_rtsp, const char *ip, const c
 			u32 j;
 
 			gf_fprintf(sdp_out, "a=mid:L%d\n", i+1);
-			gf_fprintf(sdp_out, "a=depend:%d lay", gf_rtp_streamer_get_payload_type(stream->rtp) );
+			if ((base_pid_id != stream->id) && stream->depends_on) {
+				GF_RTPOutStream *dep = stream;
+				gf_fprintf(sdp_out, "a=depend:%d lay", gf_rtp_streamer_get_payload_type(stream->rtp) );
 
-			for (j=0; j<count; j++) {
-				GF_RTPOutStream *tk = gf_list_get(streams, j);
-				if (tk == stream) continue;
-				if (tk->depends_on == stream->id) {
-					gf_fprintf(sdp_out, " L%d:%d", j+1, gf_rtp_streamer_get_payload_type(tk->rtp) );
+				while (dep) {
+					GF_RTPOutStream *base=NULL;
+					for (j=0; j<count; j++) {
+						base = gf_list_get(streams, j);
+						if (dep->depends_on == base->id) break;
+						base = NULL;
+					}
+					if (!base) break;
+
+					s32 idx = gf_list_find(streams, base);
+					if (idx<0) break;
+					gf_fprintf(sdp_out, " L%d:%d", idx+1, gf_rtp_streamer_get_payload_type(base->rtp) );
+					dep = base;
 				}
+				gf_fprintf(sdp_out, "\n");
 			}
-			gf_fprintf(sdp_out, "\n");
 		}
 
 		if (is_rtsp) {
@@ -263,7 +278,7 @@ GF_Err rtpout_init_streamer(GF_RTPOutStream *stream, const char *ipdest, Bool in
 	Bool disable_mpeg4 = GF_FALSE;
 	u32 flags, average_size, max_size, max_tsdelta, codecid, const_dur, nb_ch, samplerate, max_cts_offset, bandwidth, IV_length, KI_length, dsi_len, max_ptime, au_sn_len;
 	char *dsi;
-	Bool is_crypted;
+	Bool is_crypted, is_enh_dsi = GF_FALSE;
 	const GF_PropertyValue *p;
 
 	*base_pid_id = 0;
@@ -290,7 +305,7 @@ GF_Err rtpout_init_streamer(GF_RTPOutStream *stream, const char *ipdest, Bool in
 
 		p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_PROTECTION_SCHEME_TYPE);
 		if (!p || (p->value.uint != GF_ISOM_ISMACRYP_SCHEME)) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_RTP, ("[RTPOut] Protected track with scheme type %s, cannot stream (only ISMA over RTP is supported !\n", p ? gf_4cc_to_str(p->value.uint) : "unknwon" ));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_RTP, ("[RTPOut] Protected track with scheme type %s, cannot stream (only ISMA over RTP is supported !\n", p ? gf_4cc_to_str(p->value.uint) : "unknown" ));
 			return GF_FILTER_NOT_SUPPORTED;
 		}
 	}
@@ -305,6 +320,11 @@ GF_Err rtpout_init_streamer(GF_RTPOutStream *stream, const char *ipdest, Bool in
 	u32 cfg_crc=0;
 	dsi = NULL;
 	p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_DECODER_CONFIG);
+
+	if (!p) {
+		p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_DECODER_CONFIG_ENHANCEMENT);
+		is_enh_dsi = GF_TRUE;
+	}
 	if (p) {
 		dsi = p->value.data.ptr;
 		dsi_len = p->value.data.size;
@@ -366,6 +386,8 @@ GF_Err rtpout_init_streamer(GF_RTPOutStream *stream, const char *ipdest, Bool in
 	stream->avcc = NULL;
 	if (stream->hvcc) gf_odf_hevc_cfg_del(stream->hvcc);
 	stream->hvcc = NULL;
+	if (stream->vvcc) gf_odf_vvc_cfg_del(stream->vvcc);
+	stream->vvcc = NULL;
 
 	stream->avc_nalu_size = 0;
 	switch (codecid) {
@@ -385,33 +407,61 @@ GF_Err rtpout_init_streamer(GF_RTPOutStream *stream, const char *ipdest, Bool in
 		break;
 	case GF_CODECID_HEVC:
 	case GF_CODECID_LHVC:
+	case GF_CODECID_VVC:
 		if (dsi) {
-			GF_HEVCConfig *hvcc = gf_odf_hevc_cfg_read(dsi, dsi_len, (codecid==GF_CODECID_LHVC) ? GF_TRUE : GF_FALSE );
-			if (hvcc) {
+			GF_VVCConfig *vvcc = NULL;
+			GF_HEVCConfig *hvcc = NULL;
+			u8 vps_nut=0,sps_nut=0,pps_nut=0;
+			GF_List *param_array = NULL;
+			if (codecid == GF_CODECID_VVC) {
+				vvcc = gf_odf_vvc_cfg_read(dsi, dsi_len);
+				param_array = vvcc->param_array;
+				sps_nut = GF_VVC_NALU_SEQ_PARAM;
+				pps_nut = GF_VVC_NALU_PIC_PARAM;
+				vps_nut = GF_VVC_NALU_VID_PARAM;
+				stream->avc_nalu_size = vvcc->nal_unit_size;
+			} else {
+				hvcc = gf_odf_hevc_cfg_read(dsi, dsi_len, (is_enh_dsi && (codecid==GF_CODECID_LHVC)) ? GF_TRUE : GF_FALSE );
+				param_array = hvcc->param_array;
+				sps_nut = GF_HEVC_NALU_SEQ_PARAM;
+				pps_nut = GF_HEVC_NALU_PIC_PARAM;
+				vps_nut = GF_HEVC_NALU_VID_PARAM;
 				stream->avc_nalu_size = hvcc->nal_unit_size;
+			}
+			if (param_array) {
 				if (stream->inject_ps) {
-					u32 i, count = gf_list_count(hvcc->param_array);
-					GF_HEVCParamArray *vpsa=NULL, *spsa=NULL;
+					u32 i, count = gf_list_count(param_array);
+					GF_NALUFFParamArray *vpsa=NULL, *spsa=NULL, *ppsa=NULL;
+					stream->vvcc = vvcc;
 					stream->hvcc = hvcc;
 					for (i=0; i<count; i++) {
-						GF_HEVCParamArray *pa = gf_list_get(hvcc->param_array, i);
-						if (!vpsa && (pa->type == GF_HEVC_NALU_VID_PARAM)) {
+						GF_NALUFFParamArray *pa = gf_list_get(param_array, i);
+						if (!vpsa && (pa->type == vps_nut)) {
 							vpsa = pa;
-							gf_list_rem(hvcc->param_array, i);
+							gf_list_rem(param_array, i);
 							count--;
 						}
-						else if (!spsa && (pa->type == GF_HEVC_NALU_SEQ_PARAM)) {
+						else if (!spsa && (pa->type == sps_nut)) {
 							spsa = pa;
-							gf_list_rem(hvcc->param_array, i);
+							gf_list_rem(param_array, i);
+							count--;
+						}
+						else if (!ppsa && (pa->type == pps_nut)) {
+							ppsa = pa;
+							gf_list_rem(param_array, i);
 							count--;
 						}
 					}
-					//insert SPS at begining
-					gf_list_insert(hvcc->param_array, spsa, 0);
-					//insert VPS at begining - we now have VPS, SPS and other (PPS, SEI...)
-					gf_list_insert(hvcc->param_array, vpsa, 0);
-				} else
-					gf_odf_hevc_cfg_del(hvcc);
+					//insert PPS at beginning
+					if (ppsa) gf_list_insert(param_array, ppsa, 0);
+					//insert SPS at beginning
+					if (spsa) gf_list_insert(param_array, spsa, 0);
+					//insert VPS at beginning - we now have VPS, SPS and other (PPS, SEI...)
+					if (vpsa) gf_list_insert(param_array, vpsa, 0);
+				} else {
+					if (vvcc) gf_odf_vvc_cfg_del(vvcc);
+					if (hvcc) gf_odf_hevc_cfg_del(hvcc);
+				}
 			}
 		}
 		break;
@@ -421,9 +471,7 @@ GF_Err rtpout_init_streamer(GF_RTPOutStream *stream, const char *ipdest, Bool in
 	case GF_CODECID_AAC_MPEG2_SSRP:
 		//we cannot disable mpeg4 payload type, compute default values !!
 		if (!const_dur || !average_size || !max_tsdelta || !max_size) {
-			const_dur = 1024;
-			const_dur *= stream->timescale;
-			const_dur /= samplerate;
+			const_dur = (u32) gf_timestamp_rescale(1024, samplerate, stream->timescale);
 			max_tsdelta = const_dur;
 			average_size = 500;
 			max_size = 1000;
@@ -464,6 +512,9 @@ GF_Err rtpout_init_streamer(GF_RTPOutStream *stream, const char *ipdest, Bool in
 		KI_length = p ? p->value.uint : 0;
 	}
 
+	p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_DEPENDENCY_ID);
+	if (p) stream->depends_on = p->value.uint;
+
 
 	/*init packetizer*/
 	stream->rtp = gf_rtp_streamer_new(stream->streamtype, codecid, stream->timescale,
@@ -479,7 +530,7 @@ GF_Err rtpout_init_streamer(GF_RTPOutStream *stream, const char *ipdest, Bool in
 	}
 
 	p = gf_filter_pid_get_property(stream->pid, GF_PROP_PID_DELAY);
-	stream->ts_delay = p ? p->value.sint : 0;
+	stream->ts_delay = p ? p->value.longsint : 0;
 
 	payt++;
 	stream->microsec_ts_scale_frac.num = 1000000;
@@ -521,6 +572,7 @@ static GF_Err rtpout_setup_sdp(GF_RTPOutCtx *ctx)
 		if (read != fsize) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_RTP, ("[RTPOut] Failed to read SDP from temp file, got %d bytes but expecting %d\n", read, fsize));
 			gf_filter_pck_discard(pck);
+			e = GF_IO_ERR;
 		} else {
 			char c = output[fsize-1];
 			output[fsize-1] = 0;
@@ -528,13 +580,13 @@ static GF_Err rtpout_setup_sdp(GF_RTPOutCtx *ctx)
 			output[fsize-1] = c;
 			gf_filter_pck_set_framing(pck, GF_TRUE, GF_TRUE);
 			gf_filter_pck_send(pck);
+			e = GF_OK;
 		}
 	} else {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_RTP, ("[RTPOut] Failed to send SDP file packet\n"));
+		e = GF_OUT_OF_MEM;
 	}
-
 	gf_fclose(sdp_out);
-	return GF_OK;
+	return e;
 }
 
 static u16 rtpout_check_next_port(GF_RTPOutCtx *ctx, u16 first_port)
@@ -549,7 +601,7 @@ static u16 rtpout_check_next_port(GF_RTPOutCtx *ctx, u16 first_port)
 	return first_port;
 }
 
-static void rtpout_del_stream(GF_RTPOutStream *st)
+void rtpout_del_stream(GF_RTPOutStream *st)
 {
 	if (st->rtp) gf_rtp_streamer_del(st->rtp);
 	if (st->pck) gf_filter_pid_drop_packet(st->pid);
@@ -557,6 +609,8 @@ static void rtpout_del_stream(GF_RTPOutStream *st)
 		gf_odf_avc_cfg_del(st->avcc);
 	if (st->hvcc)
 		gf_odf_hevc_cfg_del(st->hvcc);
+	if (st->vvcc)
+		gf_odf_vvc_cfg_del(st->vvcc);
 	gf_free(st);
 }
 
@@ -665,7 +719,7 @@ static GF_Err rtpout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 
 	if (ctx->loop) {
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_PLAYBACK_MODE);
-		if (!p || (p->value.uint<GF_PLAYBACK_MODE_SEEK)) {
+		if (!p || (p->value.uint<GF_PLAYBACK_MODE_FASTFORWARD)) {
 			ctx->loop = GF_FALSE;
 			GF_LOG(GF_LOG_ERROR, GF_LOG_RTP, ("[RTPOut] PID %s cannot be seek, disabling loop\n", gf_filter_pid_get_name(pid) ));
 		}
@@ -725,7 +779,7 @@ static GF_Err rtpout_send_xps(GF_RTPOutStream *stream, GF_List *pslist, Bool *au
 	GF_Err e;
 	u32 i, count = gf_list_count(pslist);
 	for (i=0; i<count; i++) {
-		GF_AVCConfigSlot *sl = gf_list_get(pslist, i);
+		GF_NALUFFParam *sl = gf_list_get(pslist, i);
 		e = gf_rtp_streamer_send_data(stream->rtp, (char *) sl->data, sl->size, pck_size, cts, dts, stream->current_sap ? 1 : 0, *au_start, GF_FALSE, stream->pck_num, duration, stream->sample_desc_index);
 		if (e) return e;
 		*au_start = GF_FALSE;
@@ -751,15 +805,12 @@ static Bool rtpout_init_clock(GF_RTPOutCtx *ctx)
 
 		if (dts==GF_FILTER_NO_TS) dts=0;
 
-		dts *= 1000000;
-		dts /= stream->timescale;
+		dts = gf_timestamp_rescale(dts, stream->timescale, 1000000);
 		if (min_dts > dts)
 			min_dts = dts;
 
 		if (ctx->tso>0) {
-			u64 offset = ctx->tso;
-			offset *= stream->timescale;
-			offset /= 1000000;
+			u64 offset = gf_timestamp_rescale(ctx->tso, 1000000, stream->timescale);
 			stream->rtp_ts_offset = (u32) offset;
 		}
 	}
@@ -879,8 +930,7 @@ GF_Err rtpout_process_rtp(GF_List *streams, GF_RTPOutStream **active_stream, Boo
 					stream = gf_list_get(streams, i);
 					u64 dur = stream->current_dts + stream->current_duration - stream->min_dts;
 
-					dur *= 1000000;
-					dur /= stream->timescale;
+					dur = gf_timestamp_rescale(dur, stream->timescale, 1000000);
 
 					if (max_dur < dur) {
 						max_dur = dur;
@@ -897,12 +947,9 @@ GF_Err rtpout_process_rtp(GF_List *streams, GF_RTPOutStream **active_stream, Boo
 					stream = gf_list_get(streams, i);
 					p = gf_filter_pid_get_property(stream->pid, GF_PROP_NO_TS_LOOP);
 					if (!p || !p->value.boolean) {
-						u64 new_ts;
-						new_ts = max_dur;
-						new_ts *= stream->timescale;
-						new_ts /= 1000000;
+						u64 new_ts = gf_timestamp_rescale(max_dur, 1000000, stream->timescale);
 						stream->ts_offset += new_ts;
-						stream->microsec_ts_offset = (u64) (stream->ts_offset*(1000000.0/stream->timescale) + sys_clock_at_init);
+						stream->microsec_ts_offset = (u64) gf_timestamp_rescale(stream->ts_offset, stream->timescale, 1000000) + sys_clock_at_init;
 					}
 
 					//loop pid: stop and play
@@ -953,16 +1000,16 @@ GF_Err rtpout_process_rtp(GF_List *streams, GF_RTPOutStream **active_stream, Boo
 	dts += stream->rtp_ts_offset;
 	cts += stream->rtp_ts_offset;
 	if (stream->ts_delay>=0) {
-		dts += stream->ts_delay;
-		cts += stream->ts_delay;
+		dts += (u32) stream->ts_delay;
+		cts += (u32) stream->ts_delay;
 	} else {
 		if ((s32) dts >= -stream->ts_delay)
-			dts += stream->ts_delay;
+			dts += (s32) stream->ts_delay;
 		else
 			dts = 0;
 
 		if ((s32) cts >= -stream->ts_delay )
-			cts += stream->ts_delay;
+			cts += (s32) stream->ts_delay;
 		else
 			cts = 0;
 	}
@@ -1012,11 +1059,11 @@ GF_Err rtpout_process_rtp(GF_List *streams, GF_RTPOutStream **active_stream, Boo
 			if (!e)
 				e = rtpout_send_xps(stream, stream->avcc->pictureParameterSets, &au_start, pck_size, cts, dts, duration);
 		}
-		else if (stream->hvcc && stream->current_sap) {
-			u32 nbps = gf_list_count(stream->hvcc->param_array);
+		else if ((stream->hvcc||stream->vvcc) && stream->current_sap) {
+			GF_List *ar_list = stream->vvcc ? stream->vvcc->param_array : stream->hvcc->param_array;
+			u32 nbps = gf_list_count(ar_list);
 			for (i=0; i<nbps; i++) {
-				GF_HEVCParamArray *pa = gf_list_get(stream->hvcc->param_array, i);
-
+				GF_NALUFFParamArray *pa = gf_list_get(ar_list, i);
 				if (!e)
 					e = rtpout_send_xps(stream, pa->nalus, &au_start, pck_size, cts, dts, duration);
 			}
@@ -1127,20 +1174,20 @@ static const GF_FilterArgs RTPOutArgs[] =
 	{ OFFS(ip), "destination IP address (NULL is 127.0.0.1)", GF_PROP_STRING, NULL, NULL, 0},
 	{ OFFS(port), "port for first stream in session", GF_PROP_UINT, "7000", NULL, 0},
 	{ OFFS(loop), "loop all streams in session (not always possible depending on source type)", GF_PROP_BOOL, "true", NULL, 0},
-	{ OFFS(mpeg4), "send all streams using MPEG-4 generic payload format if posible", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(mpeg4), "send all streams using MPEG-4 generic payload format if possible", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(mtu), "size of RTP MTU in bytes", GF_PROP_UINT, "1460", NULL, 0},
-	{ OFFS(ttl), "time-to-live for muticast packets", GF_PROP_UINT, "2", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(ifce), "default network inteface to use", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(payt), "payload type to use for dynamic configs", GF_PROP_UINT, "96", "96-127", GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(ttl), "time-to-live for multicast packets", GF_PROP_UINT, "2", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(ifce), "default network interface to use", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(payt), "payload type to use for dynamic decoder configurations", GF_PROP_UINT, "96", "96-127", GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(delay), "send delay for packet (negative means send earlier)", GF_PROP_SINT, "0", NULL, 0},
 	{ OFFS(tt), "time tolerance in microseconds. Whenever schedule time minus realtime is below this value, the packet is sent right away", GF_PROP_UINT, "1000", NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(runfor), "run for the given time in ms. Negative value means run for ever (if loop) or source duration, 0 only outputs the sdp", GF_PROP_SINT, "-1", NULL, 0},
-	{ OFFS(tso), "set timestamp offset in microsecs. Negative value means random initial timestamp", GF_PROP_SINT, "-1", NULL, GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(tso), "set timestamp offset in microseconds. Negative value means random initial timestamp", GF_PROP_SINT, "-1", NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(xps), "force parameter set injection at each SAP. If not set, only inject if different from SDP ones", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(latm), "use latm for AAC payload format", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_EXPERT},
-	{ OFFS(dst), "URL for direct RTP mode - see filter help", GF_PROP_NAME, NULL, NULL, 0},
-	{ OFFS(ext), "file extension for direct RTP mode - see filter help", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(mime), "set mime type for direct RTP mode - see filter help", GF_PROP_NAME, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(dst), "URL for direct RTP mode", GF_PROP_NAME, NULL, NULL, 0},
+	{ OFFS(ext), "file extension for direct RTP mode", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(mime), "set mime type for direct RTP mode", GF_PROP_NAME, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
 	{0}
 };
 
@@ -1150,9 +1197,9 @@ GF_FilterRegister RTPOutRegister = {
 	GF_FS_SET_DESCRIPTION("RTP Streamer")
 	GF_FS_SET_HELP("The RTP streamer handles SDP/RTP output streaming.\n"
 	"# SDP mode\n"
-	"When the destination url is an SDP, the filter outputs an SDP on a file pid and streams RTP packets over UDP, starting from the indicated [-port]().\n"
+	"When the destination URL is an SDP, the filter outputs an SDP on a file PID and streams RTP packets over UDP, starting from the indicated [-port]().\n"
 	"# Direct RTP mode\n"
-	"When the destination url uses the protocol scheme `rtp://IP:PORT`, the filter does not output any SDP and streams a single input over RTP, using PORT indicated in the destination URL, or the first [-port]() configured.\n"
+	"When the destination URL uses the protocol scheme `rtp://IP:PORT`, the filter does not output any SDP and streams a single input over RTP, using PORT indicated in the destination URL, or the first [-port]() configured.\n"
 	"In this mode, it is usually needed to specify the desired format using [-ext]() or [-mime]().\n"
 	"EX gpac -i src -o rtp://localhost:1234/:ext=ts\n"
 	"This will indicate that the RTP streamer expects a MPEG-2 TS mux as an input.\n"
@@ -1160,9 +1207,9 @@ GF_FilterRegister RTPOutRegister = {
 	"The RTP packets produced have a maximum payload set by the [-mtu]() option (IP packet will be MTU + 40 bytes of IP+UDP+RTP headers).\n"
 	"The real-time scheduling algorithm works as follows:\n"
 	"- first initialize the clock by:\n"
-	" - computing the smallest timestamp for all input pids\n"
-	" - mapping this media time to the system clock\n"
-	"- determine the earliest packet to send next on each input pid, adding [-delay]() if any\n"
+	"  - computing the smallest timestamp for all input PIDs\n"
+	"  - mapping this media time to the system clock\n"
+	"- determine the earliest packet to send next on each input PID, adding [-delay]() if any\n"
 	"- finally compare the packet mapped timestamp __TS__ to the system clock __SC__. When __TS__ - __SC__ is less than [-tt](), the RTP packets for the source packet are sent\n"
 	)
 	.private_size = sizeof(GF_RTPOutCtx),

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2021
  *					All rights reserved
  *
  *  This file is part of GPAC / IETF RTP/RTSP/SDP sub-project
@@ -343,9 +343,7 @@ GF_SDPInfo *gf_sdp_info_new()
 	return sdp;
 }
 
-#define SDP_DESTROY(p) if (sdp->p)	\
-					gf_free(sdp->p);	\
-					sdp->p = NULL;
+#define SDP_DESTROY(p) if (sdp->p) { gf_free(sdp->p); sdp->p = NULL; }
 
 
 GF_EXPORT
@@ -446,19 +444,19 @@ static s32 SDP_MakeSeconds(char *buf)
 	test = strstr(buf, "d");
 	if (test) {
 		assert(strlen(buf)-strlen(test) < sizeof(num));
-		strncpy(num, buf, strlen(buf)-strlen(test));
+		memcpy(num, buf, MIN(sizeof(num)-1, strlen(buf)-strlen(test)));
 		return (atoi(num)*sign*86400);
 	}
 	test = strstr(buf, "h");
 	if (test) {
 		assert(strlen(buf)-strlen(test) < sizeof(num));
-		strncpy(num, buf, strlen(buf)-strlen(test));
+		memcpy(num, buf, MIN(sizeof(num)-1, strlen(buf)-strlen(test)));
 		return (atoi(num)*sign*3600);
 	}
 	test = strstr(buf, "m");
 	if (test) {
 		assert(strlen(buf)-strlen(test) < sizeof(num));
-		strncpy(num, buf, strlen(buf)-strlen(test));
+		memcpy(num, buf, MIN(sizeof(num)-1, strlen(buf)-strlen(test)));
 		return (atoi(num)*sign*60);
 	}
 	return (atoi(buf) * sign);
@@ -614,6 +612,7 @@ GF_Err gf_sdp_info_parse(GF_SDPInfo *sdp, char *sdp_text, u32 text_size)
 				if (pos <= 0) break;
 				timing->OffsetFromStart[timing->NbRepeatOffsets] = SDP_MakeSeconds(comp);
 				timing->NbRepeatOffsets += 1;
+				if (timing->NbRepeatOffsets == GF_SDP_MAX_TIMEOFFSET) break;
 			}
 			break;
 		case 'z':
@@ -627,6 +626,7 @@ GF_Err gf_sdp_info_parse(GF_SDPInfo *sdp, char *sdp_text, u32 text_size)
 				pos = gf_token_get(LineBuf, pos, " \t\r\n", comp, 3000);
 				timing->AdjustmentOffset[timing->NbZoneOffsets] = SDP_MakeSeconds(comp);
 				timing->NbZoneOffsets += 1;
+				if (timing->NbZoneOffsets == GF_SDP_MAX_TIMEOFFSET) break;
 			}
 			break;
 		case 'k':
@@ -802,7 +802,7 @@ GF_Err gf_sdp_info_check(GF_SDPInfo *sdp)
 			if (!map->payload_name || !map->ClockRate) return GF_REMOTE_SERVICE_ERROR;
 		}
 	}
-	//Encryption: nothing tells wether the scope of the global key is eclusive or not.
+	//Encryption: nothing tells whether the scope of the global key is eclusive or not.
 	//we accept a global key + keys per media entry, assuming that the media key primes
 	//on the global key
 
@@ -826,7 +826,7 @@ GF_Err gf_sdp_info_check(GF_SDPInfo *sdp)
 	if (str) { \
 		SDP_WRITE_ALLOC_STR_WITHOUT_CHECK(str, space); \
 	}		\
- 
+
 #define SDP_WRITE_ALLOC_INT(d, spa, sig)		\
 	if (sig < 0) { \
 		sprintf(temp, "%d", d);		\

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / IETF RTP/RTSP/SDP sub-project
@@ -114,7 +114,7 @@ enum
 	NC_RTSP_Option_not_support	=	551,
 };
 
-/*! Gives string descritpion of error code
+/*! Gives string description of error code
 \param ErrCode the RTSP error code
 \return the description of the RTSP error code
 */
@@ -139,7 +139,7 @@ typedef struct {
 } GF_RTSPRange;
 
 /*! parses a Range line and returns range header structure. This can be used for RTSP extension of SDP
-Note: Only support for npt for now
+\note Only support for npt for now
 \param range_buf the range string
 \return a newly allocated RTSP range
 */
@@ -293,6 +293,9 @@ typedef struct
 	/*user data: this is never touched by the lib, its intend is to help stacking
 	RTSP commands in your app*/
 	void *user_data;
+	/*user flags: this is never touched by the lib, its intend is to help stacking
+	RTSP commands in your app*/
+	u32 user_flags;
 
 
 	/*
@@ -454,7 +457,7 @@ GF_Err gf_rtsp_set_buffer_size(GF_RTSPSession *sess, u32 BufferSize);
 
 
 /*! resets state machine, invalidate SessionID
-NOTE: RFC2326 requires that the session is reseted when all RTP streams
+\note RFC2326 requires that the session is reseted when all RTP streams
 are closed. As this lib doesn't maintain the number of valid streams
 you MUST call reset when all your streams are shutdown (either requested through
 TEARDOWN or signaled through RTCP BYE packets for RTP, or any other signaling means
@@ -715,7 +718,7 @@ void gf_rtp_enable_nat_keepalive(GF_RTPChannel *ch, u32 nat_timeout);
 /*! initializes the RTP channel.
 \param ch the target RTP channel
 \param UDPBufferSize UDP stack buffer size if configurable by OS/ISP - ignored otherwise
-NOTE: on WinCE devices, this is not configurable on an app bases but for the whole OS
+\note On WinCE devices, this is not configurable on an app bases but for the whole OS
 you must update the device registry with:
 \code
 	[HKEY_LOCAL_MACHINE\Comm\Afd]
@@ -826,7 +829,8 @@ GF_Err gf_rtp_decode_rtcp(GF_RTPChannel *ch, u8 *pck, u32 pck_size, Bool *has_sr
 
 /*! computes and send Receiver report.
 If the channel is a TCP channel, you must specify
-the callback function. NOTE: many RTP implementation do NOT process RTCP info received on TCP...
+the callback function.
+\note Many RTP implementation do NOT process RTCP info received on TCP...
 the lib will decide whether the report shall be sent or not, therefore you should call
 this function at regular times
 \param ch the target RTP channel
@@ -925,7 +929,7 @@ void gf_rtp_get_ports(GF_RTPChannel *ch, u16 *rtp_port, u16 *rtcp_port);
 
 					SDP LIBRARY EXPORTS
 
-		  Note: SDP is mainly a text protocol with
+		  SDP is mainly a text protocol with
 	well defined containers. The following structures are used to write / read
 	SDP informations, and the library also provides consistency checking
 
@@ -1053,10 +1057,10 @@ typedef struct
 	u32 PortNumber;
 	/*number of ports described. If >= 2, the next media(s) in the SDP will be configured
 	to use the next tuple (for RTP). If 0 or 1, ignored
-	Note: this is used for scalable media: PortNumber indicates the port of the base
+	\note This is used for scalable media: PortNumber indicates the port of the base
 	media and NumPorts the ports||total number of the upper layers*/
 	u32 NumPorts;
-	/*currently ony "RTP/AVP" and "udp" defined*/
+	/*currently only "RTP/AVP" and "udp" defined*/
 	char *Profile;
 
 	/*list of GF_SDPConnection's. A media can have several connection in case of scalable content*/
@@ -1069,7 +1073,7 @@ typedef struct
 	GF_List *FMTP;
 
 	/*for RTP this is PayloadType, but can be opaque (string) depending on the app.
-	Formated as XX WW QQ FF
+	Formatted as XX WW QQ FF
 	When reading the SDP, the payloads defined in RTPMap are removed from this list
 	When writing the SDP for RTP, you should only specify static payload types here,
 	as dynamic ones are stored in RTPMaps and automatically written*/
@@ -1153,7 +1157,7 @@ typedef struct
 GF_SDPInfo *gf_sdp_info_new();
 /*! destrucs an SDP info
   Memory Consideration: the destructors free all non-NULL string. You should therefore
-  be carefull while (de-)assigning the strings. The function gf_sdp_info_parse() performs a complete
+  be careful while (de-)assigning the strings. The function gf_sdp_info_parse() performs a complete
   reset of the GF_SDPInfo
 
 \param sdp the target SDP to destroy
@@ -1216,6 +1220,7 @@ typedef struct
 	/*config of the stream if carried in SDP*/
 	u8 *config;
 	u32 configSize;
+	u8 config_updated;
 	/* Stream Type*/
 	u8 StreamType;
 	/* stream profile and level indication - for AVC/H264, 0xPPCCLL, with PP:profile, CC:compatibility, LL:level*/
@@ -1395,15 +1400,21 @@ enum
 	GF_RTP_PAYT_LATM,
 	/*use AC3 audio format*/
 	GF_RTP_PAYT_AC3,
+	/*use EAC3 audio format*/
+	GF_RTP_PAYT_EAC3,
 	/*use H264-SVC transport*/
 	GF_RTP_PAYT_H264_SVC,
-	/*use HEVC/H265 transport - no RFC yet, only draft*/
+	/*use HEVC/H265 transport (RFC 7798)*/
 	GF_RTP_PAYT_HEVC,
 	GF_RTP_PAYT_LHVC,
 #if GPAC_ENABLE_3GPP_DIMS_RTP
 	/*use 3GPP DIMS format*/
 	GF_RTP_PAYT_3GPP_DIMS,
 #endif
+	/*use VVC transport (no RFC yet)*/
+	GF_RTP_PAYT_VVC,
+	/*use opus audio format*/
+	GF_RTP_PAYT_OPUS,
 };
 
 
@@ -1464,7 +1475,7 @@ void gf_rtp_builder_del(GP_RTPPacketizer *builder);
 \param avgSize average size of an AU. This is not always known (real-time encoding).
 In this case you should specify a rough compute indicating how many packets could be
 stored per RTP packet. for ex AAC stereo at 44100 k / 64kbps , one AU ~= 380 bytes
-so 3 AUs for 1500 MTU is ok - BE CAREFULL: MultiSL adds some SL info on top of the 12
+so 3 AUs for 1500 MTU is ok - BE CAREFUL: MultiSL adds some SL info on top of the 12
 byte RTP header so you should specify a smaller size
 The packetizer will ALWAYS make sure there's no pb storing the packets so specifying
 more will result in a slight overhead in the SL mapping but the gain to singleSL

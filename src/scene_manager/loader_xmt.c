@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2021
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Management sub-project
@@ -122,7 +122,7 @@ typedef struct
 {
 	char *desc_name;
 	u32 ID;
-	/*store nodes refering to this URL*/
+	/*store nodes referring to this URL*/
 	GF_List *mf_urls;
 	GF_ObjectDescriptor *od;
 } XMT_ODLink;
@@ -186,7 +186,7 @@ static void xmt_new_od_link(GF_XMTParser *parser, GF_ObjectDescriptor *od, char 
 	if (!ID) {
 		if (!strnicmp(name, "od", 2)) ID = atoi(name + 2);
 		else if (!strnicmp(name, "iod", 3)) ID = atoi(name+ 3);
-		/*be carefull, an url like "11-regression-test.mp4" will return 1 on sscanf :)*/
+		/*be careful, an url like "11-regression-test.mp4" will return 1 on sscanf :)*/
 		else if (sscanf(name, "%u", &ID) == 1) {
 			char szURL[20];
 			sprintf(szURL, "%u", ID);
@@ -246,7 +246,7 @@ static void xmt_new_od_link_from_node(GF_XMTParser *parser, char *name, MFURL *u
 	ID = 0;
 	if (!strnicmp(name, "od", 2)) ID = atoi(name + 2);
 	else if (!strnicmp(name, "iod", 3)) ID = atoi(name + 3);
-	/*be carefull, an url like "11-regression-test.mp4" will return 1 on sscanf :)*/
+	/*be careful, an url like "11-regression-test.mp4" will return 1 on sscanf :)*/
 	else if (sscanf(name, "%u", &ID) == 1) {
 		char szURL[20];
 		sprintf(szURL, "%u", ID);
@@ -1858,7 +1858,10 @@ static GF_Node *xmt_parse_element(GF_XMTParser *parser, char *name, const char *
 				gf_node_get_field_by_name(parent->node, "children", &container);
 				parent->last = NULL;
 			}
-
+			if (!container.far_ptr) {
+				parser->last_error = GF_SG_UNKNOWN_NODE;
+				container.fieldType = GF_SG_VRML_UNKNOWN;
+			}
 		}
 		if (container.fieldType == GF_SG_VRML_SFNODE) {
 			if (* ((GF_Node **)container.far_ptr) ) gf_node_unregister(* ((GF_Node **)container.far_ptr) , parent->node);

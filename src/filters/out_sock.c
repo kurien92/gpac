@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2019
+ *			Copyright (c) Telecom ParisTech 2019-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / generic socket output filter
@@ -42,7 +42,7 @@ typedef struct
 	Double start, speed;
 	char *dst, *mime, *ext, *ifce;
 	Bool listen;
-	u32 maxc, port, sockbuf, ka, kp, rate;
+	u32 maxc, port, sockbuf, ka, kp, rate, ttl;
 	GF_Fraction pckr, pckd;
 
 	GF_Socket *socket;
@@ -94,6 +94,8 @@ static GF_Err sockout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 		GF_LOG(GF_LOG_ERROR, GF_LOG_NETWORK, ("[SockOut] Block patching is not supported by socket output\n"));
 		return GF_NOT_SUPPORTED;
 	}
+	if (!ctx->pid_started)
+		gf_filter_post_process_task(filter);
 	return GF_OK;
 }
 
@@ -123,9 +125,9 @@ static GF_Err sockout_initialize(GF_Filter *filter)
 		ext = gf_file_ext_start(ctx->dst);
 		if (ext) ext++;
 		if (ext) {
-			const char *port = strchr(ext, ':');
-			if (port)
-				ext = gf_file_ext_start(port);
+			const char *szport = strchr(ext, ':');
+			if (szport)
+				ext = gf_file_ext_start(szport);
 		}
 	}
 
@@ -197,7 +199,8 @@ static GF_Err sockout_initialize(GF_Filter *filter)
 	}
 
 	if (gf_sk_is_multicast_address(url)) {
-		e = gf_sk_setup_multicast(ctx->socket, url, port, 0, 0, ctx->ifce);
+		//server socket, do not bind
+		e = gf_sk_setup_multicast(ctx->socket, url, port, ctx->ttl, GF_TRUE, ctx->ifce);
 		ctx->listen = GF_FALSE;
 	} else if ((sock_type == GF_SOCK_TYPE_UDP)
 #ifdef GPAC_HAS_SOCK_UN
@@ -214,7 +217,7 @@ static GF_Err sockout_initialize(GF_Filter *filter)
 			gf_sk_server_mode(ctx->socket, GF_TRUE);
 		}
 	} else {
-		e = gf_sk_connect(ctx->socket, url, port, ctx->ifce);
+		e = gf_sk_connect(ctx->socket, url, port, NULL);
 	}
 
 	if (str) str[0] = ':';
@@ -331,8 +334,11 @@ static GF_Err sockout_process(GF_Filter *filter)
 				u64 diff = ctx->nb_bytes_sent*8*1000000 / ctx->rate - now;
 				gf_filter_ask_rt_reschedule(filter, (u32) MAX(diff, 1000) );
 				return GF_OK;
-			} else {
-				fprintf(stderr, "[SockOut] Sending at "LLU" kbps                       \r", ctx->nb_bytes_sent*8*1000/now);
+			} else if (gf_filter_reporting_enabled(filter)) {
+				char szMsg[200];
+				snprintf(szMsg, 199, "Sending at "LLU" kbps\r", ctx->nb_bytes_sent*8*1000/now);
+				szMsg[199] = 0;
+				gf_filter_update_status(filter, 0, szMsg);
 			}
 		}
 	}
@@ -361,6 +367,9 @@ static GF_Err sockout_process(GF_Filter *filter)
 			sc->pck_pending = ctx->pck_pending;
 			if (!ctx->nb_pck_processed)
 				sc->is_tuned = GF_TRUE;
+		}
+		if (!ctx->pid_started) {
+			gf_filter_ask_rt_reschedule(filter, 50000);
 		}
 	}
 	if (!ctx->pid) {
@@ -402,7 +411,7 @@ static GF_Err sockout_process(GF_Filter *filter)
 
 		if (nb_pck == 1+ctx->nb_pck_processed) {
 			ctx->nb_pck_processed++;
-			GF_LOG(GF_LOG_WARNING, GF_LOG_NETWORK, ("[SockOut] Droping packet %d per user request\r", ctx->nb_pck_processed));
+			GF_LOG(GF_LOG_WARNING, GF_LOG_NETWORK, ("[SockOut] dropping packet %d per user request\r", ctx->nb_pck_processed));
 			gf_filter_pid_drop_packet(ctx->pid);
 			ctx->next_pckd_idx = 0;
 			ctx->nb_pckd_wnd ++;
@@ -508,21 +517,22 @@ static GF_FilterProbeScore sockout_probe_url(const char *url, const char *mime)
 
 static const GF_FilterArgs SockOutArgs[] =
 {
-	{ OFFS(dst), "location of destination file", GF_PROP_NAME, NULL, NULL, 0},
+	{ OFFS(dst), "URL of destination", GF_PROP_NAME, NULL, NULL, 0},
 	{ OFFS(sockbuf), "block size used to read file", GF_PROP_UINT, "65536", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(port), "default port if not specified", GF_PROP_UINT, "1234", NULL, 0},
 	{ OFFS(ifce), "default multicast interface", GF_PROP_NAME, NULL, NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(ext), "file extension of pipe data - see filter help", GF_PROP_STRING, NULL, NULL, 0},
-	{ OFFS(mime), "mime type of pipe data - see filter help", GF_PROP_STRING, NULL, NULL, 0},
+	{ OFFS(ext), "file extension of pipe data", GF_PROP_STRING, NULL, NULL, 0},
+	{ OFFS(mime), "mime type of pipe data", GF_PROP_STRING, NULL, NULL, 0},
 	{ OFFS(listen), "indicate the output socket works in server mode", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(maxc), "max number of concurrent connections", GF_PROP_UINT, "+I", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(ka), "keep socket alive if no more connections", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(kp), "keep packets in queue if no more clients", GF_PROP_BOOL, "true", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(start), "set playback start offset. Negative value means percent of media dur with -1 <=> dur", GF_PROP_DOUBLE, "0.0", NULL, 0},
-	{ OFFS(speed), "set playback speed. If speed is negative and start is 0, start is set to -1", GF_PROP_DOUBLE, "1.0", NULL, 0},
+	{ OFFS(start), "set playback start offset. A negative value means percent of media duration with -1 equal to duration", GF_PROP_DOUBLE, "0.0", NULL, 0},
+	{ OFFS(speed), "set playback speed. If negative and start is 0, start is set to -1", GF_PROP_DOUBLE, "1.0", NULL, 0},
 	{ OFFS(rate), "set send rate in bps, disabled by default (as fast as possible)", GF_PROP_UINT, "0", NULL, GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(pckr), "reverse packet every N - see filter help", GF_PROP_FRACTION, "0/0", NULL, GF_FS_ARG_HINT_EXPERT},
-	{ OFFS(pckd), "drop packet every N - see filter help", GF_PROP_FRACTION, "0/0", NULL, GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(pckr), "reverse packet every N", GF_PROP_FRACTION, "0/0", NULL, GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(pckd), "drop packet every N", GF_PROP_FRACTION, "0/0", NULL, GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(ttl), "multicast TTL", GF_PROP_UINT, "0", "0-127", GF_FS_ARG_HINT_EXPERT},
 	{0}
 };
 
@@ -539,10 +549,10 @@ GF_FilterRegister SockOutRegister = {
 	GF_FS_SET_DESCRIPTION("UDP/TCP output")
 #ifndef GPAC_DISABLE_DOC
 	.help = "This filter handles generic output sockets (mono-directional) in blocking mode only.\n"
-		"The filter can work in server mode, waiting for source connections, or or in client mode, directly connecting.\n"
+		"The filter can work in server mode, waiting for source connections, or in client mode, directly connecting to a server.\n"
 		"In server mode, the filter can be instructed to keep running at the end of the stream.\n"
-		"In server mode, the default behaviour is to keep input packets when no more clients are connected; "
-		"this can be adjusted though the [-kp]() option, however there is no realtime regulation of how fast packets are droped.\n"
+		"In server mode, the default behavior is to keep input packets when no more clients are connected; "
+		"this can be adjusted though the [-kp]() option, however there is no realtime regulation of how fast packets are dropped.\n"
 		"If your sources are not real time, consider adding a real-time scheduler in the chain (cf reframer filter), or set the send [-rate]() option.\n"
 		"\n"
 		"- UDP sockets are used for destinations URLs formatted as `udp://NAME`\n"
@@ -554,12 +564,16 @@ GF_FilterRegister SockOutRegister = {
 		"Your platform does not supports unix domain sockets"
 #endif
 		"\n"
+		"When ports are specified in the URL and the default option separators are used (see `gpac -h doc`), the URL must either:\n"
+		"- have a trailing '/', e.g. `udp://localhost:1234/[:opts]`\n"
+		"- use `gpac` escape, e.g. `udp://localhost:1234[:gpac:opts]`\n"
+		"\n"
 		"The socket output can be configured to drop or revert packet order for test purposes.\n"
-		"For both mode, a window size in packets is specified as the drop/revert fraction denominator, and the index of the packet to drop/revert is given as the numerator/\n"
+		"A window size in packets is specified as the drop/revert fraction denominator, and the index of the packet to drop/revert is given as the numerator/\n"
 		"If the numerator is 0, a packet is randomly chosen in that window.\n"
-		"EX :pckd=4/10\n"\
+		"EX :pckd=4/10\n"
 		"This drops every 4th packet of each 10 packet window.\n"
-		"EX :pckr=0/100\n"\
+		"EX :pckr=0/100\n"
 		"This reverts the send order of one random packet in each 100 packet window.\n"
 		"\n",
 #endif //GPAC_DISABLE_DOC

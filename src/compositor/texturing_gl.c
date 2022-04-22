@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -465,6 +465,7 @@ static Bool tx_setup_format(GF_TextureHandler *txh)
 		break;
 #endif
 	case GF_PIXEL_YUV:
+	case GF_PIXEL_YVU:
     case GF_PIXEL_YUV_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
@@ -479,6 +480,8 @@ static Bool tx_setup_format(GF_TextureHandler *txh)
 	case GF_PIXEL_VYUY:
 	case GF_PIXEL_UYVY:
 	case GF_PIXEL_GL_EXTERNAL:
+	case GF_PIXEL_YUV444_10_PACK:
+	case GF_PIXEL_V210:
 #if !defined(GPAC_USE_TINYGL) && !defined(GPAC_USE_GLES1X)
 		if (!compositor->visual->compositor->shader_mode_disabled) {
 			break;
@@ -517,12 +520,22 @@ static Bool tx_setup_format(GF_TextureHandler *txh)
 	if (!txh->tx_io->tx.nb_textures) {
 		u32 pfmt = txh->pixelformat;
 		u32 stride = txh->stride;
+		Bool full_range = GF_FALSE;
+		s32 cmx = GF_CICP_MX_UNSPECIFIED;
+		if (txh->stream && txh->stream->odm && txh->stream->odm->pid) {
+			const GF_PropertyValue *p;
+			p = gf_filter_pid_get_property(txh->stream->odm->pid, GF_PROP_PID_COLR_RANGE);
+			if (p && p->value.boolean) full_range = GF_TRUE;
+			p = gf_filter_pid_get_property(txh->stream->odm->pid, GF_PROP_PID_COLR_MX);
+			if (p) cmx = p->value.uint;
+		}
+		
 		txh->tx_io->tx.pbo_state = (txh->compositor->gl_caps.pbo && txh->compositor->pbo) ? GF_GL_PBO_BOTH : GF_GL_PBO_NONE;
 		if (txh->tx_io->conv_format) {
 			stride = txh->tx_io->conv_stride;
 			pfmt = txh->tx_io->conv_format;
 		}
-		gf_gl_txw_setup(&txh->tx_io->tx, pfmt, txh->width, txh->height, stride, 0, GF_TRUE, NULL);
+		gf_gl_txw_setup(&txh->tx_io->tx, pfmt, txh->width, txh->height, stride, 0, GF_TRUE, txh->frame_ifce, full_range, cmx);
 	}
 	return 1;
 }
@@ -599,6 +612,7 @@ common:
 		txh->tx_io->flags |= TX_IS_FLIPPED;
 		return 1;
 	case GF_PIXEL_YUV:
+	case GF_PIXEL_YVU:
 	case GF_PIXEL_YUV_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
@@ -659,6 +673,7 @@ common:
 	switch (txh->pixelformat) {
 	case GF_PIXEL_YUYV:
 	case GF_PIXEL_YUV:
+	case GF_PIXEL_YVU:
 	case GF_PIXEL_YUV_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
@@ -726,16 +741,7 @@ Bool gf_sc_texture_push_image(GF_TextureHandler *txh, Bool generate_mipmaps, Boo
 #ifndef GPAC_DISABLE_3D
 	char *data;
 	u32 pixel_format;
-	int nb_views = 1, nb_layers = 1;
 	u32 push_time;
-
-	if (txh->stream) {
-		gf_mo_get_nb_views(txh->stream, &nb_views);
-		gf_mo_get_nb_layers(txh->stream, &nb_layers);
-	}
-//	if (txh->frame_ifce || nb_views == 1) nb_frames = 1;
-//	else if (nb_layers) nb_frames = nb_layers;
-
 #endif
 
 	if (for2d) {
@@ -872,7 +878,7 @@ Bool gf_sc_texture_push_image(GF_TextureHandler *txh, Bool generate_mipmaps, Boo
 	if (txh->stream) {
 		u32 ck;
 		gf_mo_get_object_time(txh->stream, &ck);
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[GL Texture] Texture (CTS %u) %d ms after due date - Pushed %s in %d ms - average push time %d ms (PBO enabled %s)\n", txh->last_frame_time, ck - txh->last_frame_time, txh->tx_io->tx.is_yuv ? "YUV textures" : "texture", push_time, txh->upload_time / txh->nb_frames, txh->tx_io->tx.pbo_state ? "yes" : "no"));
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPTIME, ("[GL Texture] Texture (CTS %u) %d ms after due date - Pushed %s in %d ms - average push time %d ms (PBO enabled %s)\n", txh->last_frame_time, ck - txh->last_frame_time, txh->tx_io->tx.is_yuv ? "YUV textures" : "texture", push_time, txh->upload_time / txh->nb_frames, txh->tx_io->tx.pbo_state ? "yes" : "no"));
 	}
 #endif
 	return 1;
@@ -1007,7 +1013,7 @@ void gf_sc_copy_to_stencil(GF_TextureHandler *txh)
 
 	if (txh->compositor->fbo_id) compositor_3d_enable_fbo(txh->compositor, GF_FALSE);
 
-	/*flip image because of openGL*/
+	/*flip image because of OpenGL*/
 	tmp = (char*)gf_malloc(sizeof(char)*txh->stride);
 	hy = txh->height/2;
 	for (i=0; i<hy; i++) {
@@ -1032,13 +1038,29 @@ void gf_get_tinygl_depth(GF_TextureHandler *txh)
 Bool gf_sc_texture_get_transform(GF_TextureHandler *txh, GF_Node *tx_transform, GF_Matrix *mx, Bool for_picking)
 {
 #ifndef GPAC_DISABLE_3D
-	int nb_views=1;
+	u32 nb_views=1;
 #endif
 	Bool ret = 0;
 	gf_mx_init(*mx);
 
 #ifndef GPAC_DISABLE_3D
-	gf_mo_get_nb_views(txh->stream, &nb_views);
+
+	if (txh->stream && txh->stream->c_w && txh->stream->c_h) {
+		Float c_x, c_y;
+		//clean aperture center in pixel coords
+		c_x = txh->width / 2 + txh->stream->c_x;
+		c_y = txh->height / 2 + txh->stream->c_y;
+		//left/top of clean aperture zone, in pixel coordinates
+		c_x -= txh->stream->c_w / 2;
+		c_y -= txh->stream->c_h / 2;
+
+		gf_mx_add_translation(mx, c_x / txh->width, c_y / txh->height, 0);
+		gf_mx_add_scale(mx, txh->stream->c_w / txh->width, txh->stream->c_h / txh->height, 1);
+		ret = 1;
+	}
+
+	if (!txh->compositor->dbgpack)
+		gf_mo_get_nb_views(txh->stream, &nb_views);
 
 #ifdef GPAC_CONFIG_ANDROID
 	if (txh->stream && txh->tx_io->gl_type == GL_TEXTURE_EXTERNAL_OES) {
@@ -1275,7 +1297,9 @@ void gf_sc_texture_set_stencil(GF_TextureHandler *txh, GF_EVGStencil * stencil)
 
 void gf_sc_texture_check_pause_on_first_load(GF_TextureHandler *txh, Bool do_freeze)
 {
-	if (!txh->stream || !txh->tx_io)
+	if (!txh->stream || !txh->tx_io || !txh->stream->odm)
+		return;
+	if (txh->stream->odm->flags & GF_ODM_IS_SPARSE)
 		return;
 
 	if (do_freeze) {

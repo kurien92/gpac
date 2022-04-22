@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2018
+ *			Copyright (c) Telecom ParisTech 2017-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / NHNT stream to file filter
@@ -94,6 +94,7 @@ GF_Err nhntdump_config_side_streams(GF_Filter *filter, GF_NHNTDumpCtx *ctx)
 
 	} else if (ctx->opid_info) {
 		gf_filter_pid_remove(ctx->opid_info);
+		ctx->opid_info = NULL;
 	}
 
 	gf_filter_pid_set_property(ctx->opid_mdia, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_FILE) );
@@ -150,9 +151,18 @@ GF_Err nhntdump_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 
 	if (is_remove) {
 		ctx->ipid = NULL;
-		gf_filter_pid_remove(ctx->opid_nhnt);
-		gf_filter_pid_remove(ctx->opid_mdia);
-		if (ctx->opid_info) gf_filter_pid_remove(ctx->opid_info);
+		if (ctx->opid_nhnt) {
+			gf_filter_pid_remove(ctx->opid_nhnt);
+			ctx->opid_nhnt = NULL;
+		}
+		if (ctx->opid_mdia) {
+			gf_filter_pid_remove(ctx->opid_mdia);
+			ctx->opid_mdia = NULL;
+		}
+		if (ctx->opid_info) {
+			gf_filter_pid_remove(ctx->opid_info);
+			ctx->opid_info = NULL;
+		}
 		return GF_OK;
 	}
 	if (! gf_filter_pid_check_caps(pid))
@@ -173,7 +183,7 @@ GF_Err nhntdump_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 		ctx->oti = gf_codecid_oti(ctx->codecid);
 	}
 	if (!ctx->oti) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("CodecID %s has no mapping to MPEG-4 systems, cannot use NHNT. Use NHML instead\n", gf_4cc_to_str(cid) ));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("CodecID %s has no mapping to MPEG-4 systems, cannot use NHNT. Use NHML instead\n", gf_4cc_to_str(cid) ));
 		return GF_NOT_SUPPORTED;
 	}
 
@@ -201,11 +211,11 @@ GF_Err nhntdump_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 	name = gf_codecid_name(ctx->codecid);
 	if (ctx->exporter) {
 		if (w && h) {
-			GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("Exporting %s - Size %dx%d\n", name, w, h));
+			GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("Exporting %s - Size %dx%d\n", name, w, h));
 		} else if (sr && chan) {
-			GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("Exporting %s - SampleRate %d %d channels %d bits per sample\n", name, sr, chan, bps));
+			GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("Exporting %s - SampleRate %d %d channels %d bits per sample\n", name, sr, chan, bps));
 		} else {
-			GF_LOG(GF_LOG_INFO, GF_LOG_AUTHOR, ("Exporting %s\n", name));
+			GF_LOG(GF_LOG_INFO, GF_LOG_MEDIA, ("Exporting %s\n", name));
 		}
 	}
 
@@ -217,7 +227,8 @@ GF_Err nhntdump_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 	ctx->first = GF_TRUE;
 
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DURATION);
-	if (p) ctx->duration = p->value.lfrac;
+	if (p && (p->value.lfrac.num>0)) ctx->duration = p->value.lfrac;
+
 	gf_filter_pid_set_framing_mode(pid, GF_TRUE);
 	return GF_OK;
 }
@@ -226,7 +237,6 @@ GF_Err nhntdump_process(GF_Filter *filter)
 {
 	GF_NHNTDumpCtx *ctx = gf_filter_get_udta(filter);
 	GF_FilterPacket *pck, *dst_pck;
-	u8 *data;
 	u8 *output;
 	u32 size, pck_size;
 	u64 dts, cts;
@@ -251,6 +261,8 @@ GF_Err nhntdump_process(GF_Filter *filter)
 		const GF_PropertyValue *p;
 
 		dst_pck = gf_filter_pck_new_alloc(ctx->opid_nhnt, nhnt_hdr_size, &output);
+		if (!dst_pck) return GF_OUT_OF_MEM;
+
 		if (!ctx->bs) ctx->bs = gf_bs_new(output, nhnt_hdr_size, GF_BITSTREAM_WRITE);
 		else gf_bs_reassign_buffer(ctx->bs, output, nhnt_hdr_size);
 
@@ -283,18 +295,22 @@ GF_Err nhntdump_process(GF_Filter *filter)
 
 		if (ctx->opid_info) {
 			dst_pck = gf_filter_pck_new_shared(ctx->opid_info, ctx->dcfg, ctx->dcfg_size, NULL);
-			gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
-			gf_filter_pck_set_readonly(dst_pck);
-			gf_filter_pck_send(dst_pck);
+			if (dst_pck) {
+				gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
+				gf_filter_pck_set_readonly(dst_pck);
+				gf_filter_pck_send(dst_pck);
+			}
 		}
 	}
 
 	//get media data
-	data = (char *) gf_filter_pck_get_data(pck, &pck_size);
+	gf_filter_pck_get_data(pck, &pck_size);
 
 	//nhnt data size
 	size = 3 + 1 + 3*(ctx->large ? 8 : 4);
 	dst_pck = gf_filter_pck_new_alloc(ctx->opid_nhnt, size, &output);
+	if (!dst_pck) return GF_OUT_OF_MEM;
+
 	//send nhnt data
 	gf_bs_reassign_buffer(ctx->bs, output, size);
 
@@ -323,8 +339,10 @@ GF_Err nhntdump_process(GF_Filter *filter)
 	gf_filter_pck_set_framing(dst_pck, GF_FALSE, GF_FALSE);
 	gf_filter_pck_send(dst_pck);
 
-	//send data packet
-	dst_pck = gf_filter_pck_new_ref(ctx->opid_mdia, data, pck_size, pck);
+	//send the complete data packet
+	dst_pck = gf_filter_pck_new_ref(ctx->opid_mdia, 0, pck_size, pck);
+	if (!dst_pck) return GF_OUT_OF_MEM;
+	
 	gf_filter_pck_merge_properties(pck, dst_pck);
 	//keep byte offset ?
 //	gf_filter_pck_set_byte_offset(dst_pck, GF_FILTER_NO_BO);

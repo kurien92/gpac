@@ -42,6 +42,8 @@ u32 gf_base64_encode(const u8 *_in, u32 inSize, u8 *_out, u32 outSize)
 
 	while (i < inSize) {
 		padding = 3 - (inSize - i);
+		if (j+4>=outSize)
+			return 0;
 		if (padding == 2) {
 			out[j] = base_64[in[i]>>2];
 			out[j+1] = base_64[(in[i] & 0x03) << 4];
@@ -147,14 +149,12 @@ u32 gf_base16_encode(u8 *_in, u32 inSize, u8 *_out, u32 outSize)
 	unsigned char *in = (unsigned char *)_in;
 	unsigned char *out = (unsigned char *)_out;
 
-	if (outSize < (inSize * 2)+1) return 0;
+	if (outSize < (inSize * 2)) return 0;
 
 	for (i=0; i<inSize; i++) {
 		out[2*i] = base_16[((in[i] & 0xf0) >> 4)];
 		out[2*i+1] = base_16[(in[i] & 0x0f)];
 	}
-	out[(inSize * 2)] = 0;
-
 	return inSize * 2;
 }
 
@@ -220,7 +220,7 @@ GF_Err gf_gz_compress_payload_ex(u8 **data, u32 data_len, u32 *max_size, u8 data
 			*max_size = (u32) stream.total_out;
 			return GF_OK;
 		}
-		GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, ("[GZ] compressed data (%d) larger than input (%d)\n", (u32) stream.total_out, (u32) data_len ));
+		GF_LOG(GF_LOG_INFO, GF_LOG_CORE, ("[GZ] compressed data (%d) larger than input (%d)\n", (u32) stream.total_out, (u32) data_len ));
 	}
 
 	if (out_comp_data) {
@@ -361,7 +361,7 @@ GF_Err gf_lz_compress_payload(u8 **data, u32 data_len, u32 *max_size)
 	comp_size = block_size - strm.avail_out;
 
 	if (data_len < comp_size) {
-		GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, ("[LZMA] compressed data (%d) larger than input (%d)\n", (u32) comp_size, (u32) data_len ));
+		GF_LOG(GF_LOG_INFO, GF_LOG_CORE, ("[LZMA] compressed data (%d) larger than input (%d)\n", (u32) comp_size, (u32) data_len ));
 	}
 
 	if (*max_size < comp_size) {

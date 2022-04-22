@@ -1,6 +1,6 @@
 ;--------------------------------
 ;General
-!define GPAC_VERSION 1.0.0
+!define GPAC_VERSION 2.1-DEV
 !include default.out
 
 !define GPAC_ROOT ..\..\..
@@ -286,13 +286,13 @@ Section "GPAC Player" SecOsmo4
 
   File "${GPAC_BIN}\gm_dx_hw.dll"
 
-  ;copy GUI
+  ;copy shared res
   SetOutPath $INSTDIR\share
   File "${GPAC_ROOT}\share\default.cfg"
   SetOutPath $INSTDIR\share\res
-  File "${GPAC_ROOT}\share\res\gpac.mp4"
-  File "${GPAC_ROOT}\share\res\gpac_cfg_test.mp4"
-  File "${GPAC_ROOT}\share\res\gpac.png"
+  File /r /x .git ${GPAC_ROOT}\share\res\*
+
+  ;copy GUI
   SetOutPath $INSTDIR\share\gui
   File "${GPAC_ROOT}\share\gui\gui.bt"
   File "${GPAC_ROOT}\share\gui\gui.js"
@@ -306,6 +306,10 @@ Section "GPAC Player" SecOsmo4
   ;copy scripts
   SetOutPath $INSTDIR\share\scripts
   File /r /x .git ${GPAC_ROOT}\share\scripts\*
+
+  ;copy python
+  SetOutPath $INSTDIR\share\python
+  File /r /x .git ${GPAC_ROOT}\share\python\*
 
   ;copy shaders
   SetOutPath $INSTDIR\share\shaders

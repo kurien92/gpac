@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2012-2019
+ *			Copyright (c) Telecom ParisTech 2012-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Adaptive HTTP Streaming sub-project
@@ -45,6 +45,7 @@ extern "C" {
 */
 
 #include <gpac/tools.h>
+#include <gpac/list.h>
 
 #ifndef GPAC_DISABLE_DASH_CLIENT
 
@@ -56,14 +57,14 @@ static const char * const GF_DASH_MPD_MIME_TYPES[] = { "application/dash+xml", "
 /*!
  * All the possible Mime-types for M3U8 files
  */
-static const char * const GF_DASH_M3U8_MIME_TYPES[] = { "video/x-mpegurl", "audio/x-mpegurl", "application/x-mpegurl", "application/vnd.apple.mpegurl", NULL};
+static const char * const GF_DASH_M3U8_MIME_TYPES[] = { "video/x-mpegurl", "audio/x-mpegurl", "application/x-mpegURL", "application/vnd.apple.mpegURL", NULL};
 
 /*!
  * All the possible Mime-types for Smooth files
  */
 static const char * const GF_DASH_SMOOTH_MIME_TYPES[] = { "application/vnd.ms-sstr+xml", NULL};
 
-/*! DASH Event type. The DASH client communitcaes with the user through a callback mechanism using events*/
+/*! DASH Event type. The DASH client communicates with the user through a callback mechanism using events*/
 typedef enum
 {
 	/*! event sent if an error occurs when setting up manifest*/
@@ -74,7 +75,7 @@ typedef enum
 	GF_DASH_EVENT_PERIOD_SETUP_ERROR,
 	/*! event sent once the first segment of each selected group is fetched - user should load playback chain(s) at this point*/
 	GF_DASH_EVENT_CREATE_PLAYBACK,
-	/*! event sent when reseting groups at period switch or at exit - user should unload playback chain(s) at this point*/
+	/*! event sent when resetting groups at period switch or at exit - user should unload playback chain(s) at this point*/
 	GF_DASH_EVENT_DESTROY_PLAYBACK,
 	/*! event sent once a new segment becomes available*/
 	GF_DASH_EVENT_SEGMENT_AVAILABLE,
@@ -82,15 +83,15 @@ typedef enum
 	GF_DASH_EVENT_QUALITY_SWITCH,
 	/*! position in timeshift buffer has changed (eg, paused)*/
 	GF_DASH_EVENT_TIMESHIFT_UPDATE,
-	/*! event sent when timeshift buffer is overflown - the group_idx param contains the max number of dropped segments of all representations droped by the client, or -1 if play pos is ahead of live */
+	/*! event sent when timeshift buffer is overflown - the group_idx param contains the max number of dropped segments of all representations dropped by the client, or -1 if play pos is ahead of live */
 	GF_DASH_EVENT_TIMESHIFT_OVERFLOW,
-	/*! event send when we need the decoding statistics*/
+	/*! event sent when we need the decoding statistics*/
 	GF_DASH_EVENT_CODEC_STAT_QUERY,
-	/*! event send when no threading to trigger segment download abort*/
+	/*! event sent when no threading to trigger segment download abort*/
 	GF_DASH_EVENT_ABORT_DOWNLOAD,
-	/*! event send whenever cache is full, to allow client to dispatch any segment*/
+	/*! event sent whenever cache is full, to allow client to dispatch any segment*/
 	GF_DASH_EVENT_CACHE_FULL,
-	/*! event send when all groups are done in a period*/
+	/*! event sent when all groups are done in a period - if group_idx is 1, this announces a time discontinuity for next period*/
 	GF_DASH_EVENT_END_OF_PERIOD,
 } GF_DASHEventType;
 
@@ -148,6 +149,10 @@ struct _gf_dash_io
 	u32 (*get_total_size)(GF_DASHFileIO *dashio, GF_DASHFileIOSession session);
 	/*! get the total size on bytes for the session*/
 	u32 (*get_bytes_done)(GF_DASHFileIO *dashio, GF_DASHFileIOSession session);
+
+	/*! callback when manifest (DASH, HLS) or sub-playlist (HLS) is updated*/
+	void (*manifest_updated)(GF_DASHFileIO *dashio, const char *manifest_name, const char *local_path, s32 group_idx);
+
 };
 
 /*! DASH client object*/
@@ -168,31 +173,20 @@ typedef enum
 	GF_DASH_SELECT_BANDWIDTH_HIGHEST_TILES
 } GF_DASHInitialSelectionMode;
 
-/*! DASH client threading mode*/
-typedef enum
-{
-	/*! no threads used, gf_dash_process shall be called on regular basis*/
-	GF_DASH_THREAD_NONE = 0,
-	/*! single thread used for MPD and segment download*/
-	GF_DASH_THREAD_SINGLE,
-	/*! one thread for MPD and each independent representations*/
-	GF_DASH_THREAD_ALL
-} GF_DASHThreadMode;
 
 /*! create a new DASH client
 \param dash_io DASH callbacks to the user
-\param thread_mode threading mode of the dash client
 \param max_cache_duration maximum duration in milliseconds for the cached media. If less than \code mpd@minBufferTime \endcode , \code mpd@minBufferTime \endcode  is used
-\param auto_switch_count forces representation switching every auto_switch_count segments, set to 0 to disable
+\param auto_switch_count forces representation switching (quality up if positive, down if negative) every auto_switch_count segments, set to 0 to disable
 \param keep_files do not delete files from the cache
 \param disable_switching turn off bandwidth switching algorithm
 \param first_select_mode indicates which representation to select upon startup
 \param initial_time_shift_value sets initial buffering: if between 0 and 100, this is a percentage of the time shift window of the session. If greater than 100, this is a time shift in milliseconds.
 \return a new DASH client
 */
-GF_DashClient *gf_dash_new(GF_DASHFileIO *dash_io, GF_DASHThreadMode thread_mode,
+GF_DashClient *gf_dash_new(GF_DASHFileIO *dash_io,
                            u32 max_cache_duration,
-                           u32 auto_switch_count,
+                           s32 auto_switch_count,
                            Bool keep_files,
                            Bool disable_switching,
                            GF_DASHInitialSelectionMode first_select_mode,
@@ -232,6 +226,12 @@ const char *gf_dash_get_url(GF_DashClient *dash);
 */
 Bool gf_dash_is_m3u8(GF_DashClient *dash);
 
+/*! tells whether we are playing some MS SmoothStreaming
+\param dash the target dash client
+\return GF_TRUE if the manifest is SmoothStreaming
+*/
+Bool gf_dash_is_smooth_streaming(GF_DashClient *dash);
+
 /*! gets title and source for this MPD
 \param dash the target dash client
 \param title set to the title of the manifest (may be NULL)
@@ -242,9 +242,8 @@ void gf_dash_get_info(GF_DashClient *dash, const char **title, const char **sour
 /*! switches quality up or down
 \param dash the target dash client
 \param switch_up indicates if the quality should be increased (GF_TRUE) or decreased (GF_FALSE)
-\param force_immediate_switch if GF_TRUE, aborts all current downloads, remove downloaded segments not yet played and switch. Otherwise, existing switching will only happen once the existing downloaded segments have been played
 */
-void gf_dash_switch_quality(GF_DashClient *dash, Bool switch_up, Bool force_immediate_switch);
+void gf_dash_switch_quality(GF_DashClient *dash, Bool switch_up);
 
 /*! indicates whether the DASH client is running or not
 \param dash the target dash client
@@ -329,12 +328,32 @@ s32 gf_dash_get_dependent_group_index(GF_DashClient *dash, u32 group_idx, u32 gr
 */
 Bool gf_dash_is_group_selectable(GF_DashClient *dash, u32 group_idx);
 
-/*! selects a group for playback. If other groups are alternate to this group (through the group attribute), they are automatically deselected
+/*! selects a group for playback. If group selection is enabled,  other groups are alternate to this group (through the group attribute), they are automatically deselected
 \param dash the target dash client
 \param group_idx the 0-based index of the target group
 \param select if GF_TRUE, will select this group and disable any alternate group. If GF_FALSE, only deselects the group
 */
 void gf_dash_group_select(GF_DashClient *dash, u32 group_idx, Bool select);
+
+/*! gets group ID (through the group attribute), -1 if undefined
+\param dash the target dash client
+\param group_idx the 0-based index of the target group
+\return ID of the group
+*/
+s32 gf_dash_group_get_id(GF_DashClient *dash, u32 group_idx);
+
+/*! enables group selection  through the group attribute
+\param dash the target dash client
+\param enable if GF_TRUE, group selection will be done whenever selecting a new group
+*/
+void gf_dash_enable_group_selection(GF_DashClient *dash, Bool enable);
+
+/*! checks if first segment (used to initialize) was an init segment or the first in a sequence (aka M2TS)
+\param dash the target dash client
+\param group_idx the 0-based index of the target group
+\return GF_TRUE if first segment was a media segment
+*/
+Bool gf_dash_group_init_segment_is_media(GF_DashClient *dash, u32 group_idx);
 
 /*! performs selection of representations based on language code
 \param dash the target dash client
@@ -362,10 +381,11 @@ const char *gf_dash_group_get_segment_init_url(GF_DashClient *dash, u32 group_id
 This is used for full segment encryption modes of MPEG-2 TS segments. key_IV is optional
 \param dash the target dash client
 \param group_idx the 0-based index of the target group
+\param crypto_type set to 0 if no encryption in segments, 1 if full segment encryption, 2 if CENC/per-sample encryption is used -  may be NULL
 \param key_IV set to the IV used for the first media segment (can be NULL)
-\return the key URL of the first media segment
+\return the key URL of the first media segment, either a URN or a resolved URL
 */
-const char *gf_dash_group_get_segment_init_keys(GF_DashClient *dash, u32 group_idx, bin128 *key_IV);
+const char *gf_dash_group_get_segment_init_keys(GF_DashClient *dash, u32 group_idx, u32 *crypto_type, bin128 *key_IV);
 
 /*! returns the language of the group
 \param dash the target dash client
@@ -384,7 +404,7 @@ u32 gf_dash_group_get_audio_channels(GF_DashClient *dash, u32 group_idx);
 /*! gets time shift buffer depth of the group
 \param dash the target dash client
 \param group_idx the 0-based index of the target group
-\return time shift buffer depth of the group, -1 means infinity
+\return time shift buffer depth in ms of the group, -1 means infinity
 */
 u32 gf_dash_group_get_time_shift_buffer_depth(GF_DashClient *dash, u32 group_idx);
 
@@ -473,26 +493,27 @@ Bool gf_dash_group_enum_descriptor(GF_DashClient *dash, u32 group_idx, GF_DashDe
 \param switching_end_range set to end byte offset of the switching segment if needed (optional, may be NULL)
 \param original_url set to original URL value of the segment (optional, may be NULL)
 \param has_next_segment set to GF_TRUE if next segment location is known (unthreaded mode) or next segment is downloaded (threaded mode) (optional, may be NULL)
-\param key_url set to the key URL of the next segment for MPEG-2 TS full segment encryption (optional, may be NULL)
+\param key_url set to the key URL of the next segment for MPEG-2 TS full segment encryption (optional, may be NULL). The URL is either a URN or a resolved URL
 \param key_IV set to the key initialization vector of the next segment for MPEG-2 TS full segment encryption (optional, may be NULL)
-\return GF_BUFFER_TOO_SMALL if no segment found, GF_EOS if end of session or error if any
+\param utc set to UTC mapping for first sample of segment, 0 if none defined
+\return GF_BUFFER_TOO_SMALL if no segment found, GF_EOS if end of session, GF_URL_REMOVED if segment is disabled (but all output info is OK, this can be ignored and considered as GF_OK by the user) or error if any
 */
 GF_Err gf_dash_group_get_next_segment_location(GF_DashClient *dash, u32 group_idx, u32 dependent_representation_index, const char **url, u64 *start_range, u64 *end_range,
         s32 *switching_index, const char **switching_url, u64 *switching_start_range, u64 *switching_end_range,
-        const char **original_url, Bool *has_next_segment, const char **key_url, bin128 *key_IV);
+        const char **original_url, Bool *has_next_segment, const char **key_url, bin128 *key_IV, u64 *utc);
 
-/*! same as gf_dash_group_get_next_segment_location but query the current downloaded segment
+/*! gets some info on the segment
 \param dash the target dash client
 \param group_idx the 0-based index of the target group
-\param url set to the URL of the next segment
-\param switching_index set to the quality index of the segment (optional, may be NULL)
-\param switching_url set to the URL of the switching segment if needed (optional, may be NULL)
-\param original_url set to original URL value of the segment (optional, may be NULL)
-\param switched set to GF_TRUE if current segment being downloaded follows an aborted download (optional, may be NULL)
-\return GF_BUFFER_TOO_SMALL if no segment found, GF_EOS if end of session or error if any
+\param dependent_representation_index index of the dependent representation to query, 0-based
+\param seg_name  set to the segment name, without base url - optional, may be NULL
+\param seg_number  set to the segment number for $Number$ addressing - optional, may be NULL
+\param seg_time  set to the segment start time  - optional, may be NULL
+\param seg_dur_ms  set to the segment estimated duration in ms  - optional, may be NULL
+\param init_segment set to the init segment name, without base url  - optional, may be NULL
+\return error if any, GF_BUFFER_TOO_SMALL if no segments queued for download
 */
-GF_EXPORT
-GF_Err gf_dash_group_probe_current_download_segment_location(GF_DashClient *dash, u32 group_idx, const char **url, s32 *switching_index, const char **switching_url, const char **original_url, Bool *switched);
+GF_Err gf_dash_group_next_seg_info(GF_DashClient *dash, u32 group_idx, u32 dependent_representation_index, const char **seg_name, u32 *seg_number, GF_Fraction64 *seg_time, u32 *seg_dur_ms, const char **init_segment);
 
 /*! checks if loop was detected in playback. This is mostly used for broadcast (eMBMS, ROUTE) based on pcap replay.
 \param dash the target dash client
@@ -500,6 +521,29 @@ GF_Err gf_dash_group_probe_current_download_segment_location(GF_DashClient *dash
 \return  GF_TRUE if segment numbers loop was detected
 */
 Bool gf_dash_group_loop_detected(GF_DashClient *dash, u32 group_idx);
+
+/*! checks if group is using low latency delivery.
+\param dash the target dash client
+\param group_idx the 0-based index of the target group
+\return GF_TRUE if low latency is used, GF_FALSE otherwise
+*/
+Bool gf_dash_is_low_latency(GF_DashClient *dash, u32 group_idx);
+
+/*! gets average duration of segments for the current rep.
+\param dash the target dash client
+\param group_idx the 0-based index of the target group
+\param duration set to average segment duration
+\param timescale set to timescale used to exprss duration
+\return error if any
+*/
+GF_Err gf_dash_group_get_segment_duration(GF_DashClient *dash, u32 group_idx, u32 *duration, u32 *timescale);
+
+/*! gets ID of active representaion.
+\param dash the target dash client
+\param group_idx the 0-based index of the target group
+\return ID of representation, NULL if error
+*/
+const char *gf_dash_group_get_representation_id(GF_DashClient *dash, u32 group_idx);
 
 /*! returns number of seconds at which playback shall start for the group in the current period.
 The first segment available for the period will be so that gf_dash_group_get_start_range is in this range after the caller
@@ -514,22 +558,6 @@ Double gf_dash_group_get_start_range(GF_DashClient *dash, u32 group_idx);
 \param group_idx the 0-based index of the target group
 */
 void gf_dash_group_discard_segment(GF_DashClient *dash, u32 group_idx);
-
-/*! gets the number of media resources available in the cache for this group
-\param dash the target dash client
-\param group_idx the 0-based index of the target group
-\param group_is_done setto GF_TRUE if group is done playing
-\return number of segments ready
-*/
-u32 gf_dash_group_get_num_segments_ready(GF_DashClient *dash, u32 group_idx, Bool *group_is_done);
-
-/*! get the maximum number of media resources that can be put in the cache for this group in threaded mode.
-In unthreaded mode, only the next URL is available and the caller is responsible for fetching the media
-\param dash the target dash client
-\param group_idx the 0-based index of the target group
-\return maximum number of cached segments
-*/
-u32 gf_dash_group_get_max_segments_in_cache(GF_DashClient *dash, u32 group_idx);
 
 /*! indicates to the DASH engine that the group playback has been stopped by the user
 \param dash the target dash client
@@ -553,6 +581,13 @@ GF_Err gf_dash_group_get_presentation_time_offset(GF_DashClient *dash, u32 group
 \return GF_TRUE if the playback position is in the last period of the presentation
 */
 Bool gf_dash_in_last_period(GF_DashClient *dash, Bool check_eos);
+
+/*! checks if the group is playing
+\param dash the target dash client
+\param group_idx the 0-based index of the target group
+\return GF_TRUE if group is done playing
+*/
+Bool gf_dash_get_group_done(GF_DashClient *dash, u32 group_idx);
 
 /*! gets current period switching status for the session.
 \param dash the target dash client
@@ -612,9 +647,13 @@ void gf_dash_set_speed(GF_DashClient *dash, Double speed);
 /*! updates media bandwidth for the given group. Only allowed for groups without dependencies to other groups
 \param dash the target dash client
 \param group_idx the 0-based index of the target group
+\param bits_per_sec current download rate in bits per seconds
+\param total_bytes total size of segment being downloaded
+\param bytes_done number of bytes already downloaded in current segment
+\param us_since_start time elapsed in microseconds since  segment has been scheduled for download
 \return error if any
 */
-GF_Err gf_dash_group_check_bandwidth(GF_DashClient *dash, u32 group_idx);
+GF_Err gf_dash_group_check_bandwidth(GF_DashClient *dash, u32 group_idx, u32 bits_per_sec, u64 total_bytes, u64 bytes_done, u64 us_since_start);
 
 /*! enables UTC drift computation using HTTP header "Server-UTC: UTC", where UTC is in ms
 \param dash the target dash client
@@ -633,6 +672,12 @@ Bool gf_dash_is_dynamic_mpd(GF_DashClient *dash);
 \return minimum buffer time in ms
 */
 u32 gf_dash_get_min_buffer_time(GF_DashClient *dash);
+
+/*! gets the maximum segment duration in session
+\param dash the target dash client
+\return the maximum segment duration in ms
+*/
+u32 gf_dash_get_max_segment_duration(GF_DashClient *dash);
 
 /*! gets the difference between the local UTC clock and the one reported by the server
 \param dash the target dash client
@@ -662,18 +707,19 @@ GF_Err gf_dash_set_max_resolution(GF_DashClient *dash, u32 width, u32 height, u8
 */
 GF_Err gf_dash_set_min_timeout_between_404(GF_DashClient *dash, u32 min_timeout_between_404);
 
-/*! sets time in ms after which 404 request for a segment will indicate segment lost. The clien always retries for segment availability time + segment duration. This allows extanding slightly the probe time (used when segment durations varies, or for VBR broadcast). The default value is 100 ms.
+/*! sets time in ms after which 404 request for a segment will indicate segment lost. The client always retries for segment availability time + segment duration. This allows extending slightly the probe time (used when segment durations varies, or for VBR broadcast). The default value is 100 ms.
 \param dash the target dash client
 \param expire_after_ms delay in milliseconds
 \return error if any
 */
 GF_Err gf_dash_set_segment_expiration_threshold(GF_DashClient *dash, u32 expire_after_ms);
 
-/*! only enables the given group - this shall be set before calling \ref gf_dash_open. If group_idx is <0 (default) no groups will be disabled
+/*! only enables the given groups - this shall be set before calling \ref gf_dash_open. If NULL, no groups will be disabled
 \param dash the target dash client
-\param group_idx the 0-based index of the target group
+\param groups_idx list of  0-based index of the target groups to enable,
+\param nb_groups number of group indexes in list
 */
-void gf_dash_debug_group(GF_DashClient *dash, s32 group_idx);
+void gf_dash_debug_groups(GF_DashClient *dash, const u32 *groups_idx, u32 nb_groups);
 
 /*! split all adatation sets so that they contain only one representation (quality)
 \param dash the target dash client
@@ -717,6 +763,24 @@ void gf_dash_set_switching_probe_count(GF_DashClient *dash, u32 switch_probe_cou
 */
 void gf_dash_set_agressive_adaptation(GF_DashClient *dash, Bool enable_agressive_switch);
 
+/*! enables single-range requests for LL-HLS byterange, rather than issuing a request per PART. This assumes that:
+ -  each URI in the different parts is the SAME
+ -  byte ranges are contiguous in the URL
+
+Errors will be thrown if these are not met on future parts and merging will be disabled, however the scheduled buggy segment will NOT be disarded
+
+\param dash the target dash client
+\param enable_single_range if GF_TRUE, enables single range, otherwise disables it
+*/
+void gf_dash_enable_single_range_llhls(GF_DashClient *dash, Bool enable_single_range);
+
+/*! create a new DASH client
+\param dash the target dash cleint
+\param auto_switch_count forces representation switching (quality up if positive, down if negative) every auto_switch_count segments, set to 0 to disable
+\param auto_switch_loop if false (default when creating dasher), restart at lowest quality when higher quality is reached and vice-versa. If true, quality switches decreases then increase in loop
+*/
+void gf_dash_set_auto_switch(GF_DashClient *dash, s32 auto_switch_count, Bool auto_switch_loop);
+
 /*! returns active period start
 \param dash the target dash client
 \return period start in milliseconds
@@ -750,6 +814,7 @@ u32 gf_dash_group_get_num_components(GF_DashClient *dash, u32 group_idx);
 void gf_dash_disable_speed_adaptation(GF_DashClient *dash, Bool disable);
 
 /*! DASH/HLS quality information structure*/
+//UPDATE DASHQualityInfoNat in libgpac.py whenever modifying this structure !!
 typedef struct
 {
 	/*! bandwidth in bits per second*/
@@ -767,9 +832,9 @@ typedef struct
 	/*! video interlaced flag*/
 	Bool interlaced;
 	/*! video framerate numerator*/
-	u32 fps_den;
-	/*! video framerate denominator*/
 	u32 fps_num;
+	/*! video framerate denominator*/
+	u32 fps_den;
 	/*! video sample aspect ratio numerator*/
 	u32 par_num;
 	/*! video sample aspect ratio denominator*/
@@ -782,6 +847,12 @@ typedef struct
 	Bool disabled;
 	/*! selected flag*/
 	Bool is_selected;
+	/*! AST offset in seconds, 0 if not low latency*/
+	Double ast_offset;
+	/*! average segment duration, 0 if unknown*/
+	Double average_duration;
+	/*! list of segmentURLs if known, NULL otherwise. Used for onDemand profile to get segment sizes*/
+	const GF_List *seg_urls;
 } GF_DASHQualityInfo;
 
 /*! gets information on  a given quality
@@ -792,6 +863,16 @@ typedef struct
 \return error if any
 */
 GF_Err gf_dash_group_get_quality_info(GF_DashClient *dash, u32 group_idx, u32 quality_idx, GF_DASHQualityInfo *quality);
+
+/*! gets segment template info used by group
+\param dash the target dash client
+\param group_idx the 0-based index of the target group
+\param segment_timeline_timescale set to segment timeline timescale, or to 0 if no segment timeline
+\param init_url set to initialization URL (template, timeline or base URL for VoD) as indicated in manifest (no resolution to base URL)
+\param hls_variant set toHLS variant name or NULL
+\return segment template, NULL if no templates used. Memory must be freed by caller
+*/
+char *gf_dash_group_get_template(GF_DashClient *dash, u32 group_idx, u32 *segment_timeline_timescale, const char **init_url, const char **hls_variant);
 
 /*! checks automatic switching mode
 \param dash the target dash client
@@ -821,13 +902,6 @@ GF_Err gf_dash_group_select_quality(GF_DashClient *dash, u32 group_idx, const ch
 \return the current quality index for the given group*/
 s32 gf_dash_group_get_active_quality(GF_DashClient *dash, u32 group_idx);
 
-/*! gets download rate for a given group
-\param dash the target dash client
-\param group_idx the 0-based index of the target group
-\return download rate in bytes per second
-*/
-u32 gf_dash_group_get_download_rate(GF_DashClient *dash, u32 group_idx);
-
 /*! forces NTP of the DASH client to be the given NTP
 \param dash the target dash client
 \param server_ntp NTP timestamp to set as server clock
@@ -835,7 +909,7 @@ u32 gf_dash_group_get_download_rate(GF_DashClient *dash, u32 group_idx);
 void gf_dash_override_ntp(GF_DashClient *dash, u64 server_ntp);
 
 /*! Tile adaptation mode
-This mode specifies how bitrate is allocated accross tiles of the same video
+This mode specifies how bitrate is allocated across tiles of the same video
 */
 typedef enum
 {
@@ -865,6 +939,13 @@ typedef enum
 \param tile_rate_decrease percentage (0->100) of global bandwidth to use at each level (recursive rate decrease for all level). If 0% or 100%, automatic rate allocation among tiles is performed (default mode)
 */
 void gf_dash_set_tile_adaptation_mode(GF_DashClient *dash, GF_DASHTileAdaptationMode mode, u32 tile_rate_decrease);
+
+
+/*! consider tile with highest quality degradation hints (not visible ones or not gazed at) as lost, triggering a  GF_URL_REMOVE  upon \ref gf_dash_group_get_next_segment_location calls. Mostly used to debug tiling adaptation
+\param dash the target dash client
+\param disable_tiles if GF_TRUE, tiles with highest quality degradation hints will not be played.
+*/
+void gf_dash_disable_low_quality_tiles(GF_DashClient *dash, Bool disable_tiles);
 
 /*! gets current tile adaptation mode
 \param dash the target dash client
@@ -932,6 +1013,13 @@ Bool gf_dash_all_groups_done(GF_DashClient *dash);
 */
 void gf_dash_set_period_xlink_query_string(GF_DashClient *dash, const char *query_string);
 
+/*! sets MPD chaining mode
+\param dash the target dash client
+\param chaining_mode if 0, no chaining. If 1, chain at end. If 2 chain on error or at end
+*/
+void gf_dash_set_chaining_mode(GF_DashClient *dash, u32 chaining_mode);
+
+
 /*! DASH client adaptation algorithm*/
 typedef enum {
 	/*! no adaptation*/
@@ -949,7 +1037,9 @@ typedef enum {
 	/*! BOLA-U*/
 	GF_DASH_ALGO_BOLA_U,
 	/*! BOLA-O*/
-	GF_DASH_ALGO_BOLA_O
+	GF_DASH_ALGO_BOLA_O,
+	/*! Custom*/
+	GF_DASH_ALGO_CUSTOM
 } GF_DASHAdaptationAlgorithm;
 
 /*! sets dash adaptation algorithm. Cannot be called on an active session
@@ -961,26 +1051,28 @@ void gf_dash_set_algo(GF_DashClient *dash, GF_DASHAdaptationAlgorithm algo);
 /*! sets group download status of the last downloaded segment for non threaded modes
 \param dash the target dash client
 \param group_idx the 0-based index of the target group
+\param dep_rep_idx the 0-based index of the current dependent rep
 \param err error status of the download, GF_OK if no error
 */
-void gf_dash_set_group_download_state(GF_DashClient *dash, u32 group_idx, GF_Err err);
+void gf_dash_set_group_download_state(GF_DashClient *dash, u32 group_idx, u32 dep_rep_idx, GF_Err err);
 
 /*! sets group download statistics of the last downloaded segment for non threaded modes
 \param dash the target dash client
 \param group_idx the 0-based index of the target group
+\param dep_rep_idx the 0-based index of the dependent rep
 \param bytes_per_sec transfer rates in bytes per seconds
 \param file_size segment size in bytes
-\param bytes_done number of received bytes
 \param is_broadcast set to GF_TRUE if the file is received over a multicast/broadcast link such as eMBMS or ROUTE (i.e. file was pushed to cache)
+\param us_since_start time in microseconds since start of the download
 */
-void gf_dash_group_store_stats(GF_DashClient *dash, u32 group_idx, u32 bytes_per_sec, u32 file_size, u32 bytes_done, Bool is_broadcast);
+void gf_dash_group_store_stats(GF_DashClient *dash, u32 group_idx, u32 dep_rep_idx, u32 bytes_per_sec, u64 file_size, Bool is_broadcast, u64 us_since_start);
 
-/*! sets availabilityStartTime shift for ATSC. By default the ATSC tune-in is done by matching the last received segment name
-to the segment template and deriving the ATSC UTC reference from that. The function allows shifting the computed value by a given amount.
+/*! sets availabilityStartTime shift for ROUTE. By default the ROUTE tune-in is done by matching the last received segment name
+to the segment template and deriving the ROUTE UTC reference from that. The function allows shifting the computed value by a given amount.
 \param dash the target dash client
-\param ast_shift clock shift in milliseconds of the ATSC receiver tune-in. Positive values shift the clock in the future, negative ones in the past
+\param ast_shift clock shift in milliseconds of the ROUTE receiver tune-in. Positive values shift the clock in the future, negative ones in the past
 */
-void gf_dash_set_atsc_ast_shift(GF_DashClient *dash, u32 ast_shift);
+void gf_dash_set_route_ast_shift(GF_DashClient *dash, u32 ast_shift);
 
 /*! gets the minimum wait time before calling \ref gf_dash_process again for unthreaded mode
 \param dash the target dash client
@@ -991,9 +1083,85 @@ u32 gf_dash_get_min_wait_ms(GF_DashClient *dash);
 /*! gets the adaptation set ID of a given group
 \param dash the target dash client
 \param group_idx the 0-based index of the target group
-\return the adaptation set ID
+\return the adaptation set ID, -1 if not set
 */
-u32 gf_dash_group_get_as_id(GF_DashClient *dash, u32 group_idx);
+s32 gf_dash_group_get_as_id(GF_DashClient *dash, u32 group_idx);
+
+/*! check if the group has an init segment associated
+\param dash the target dash client
+\param group_idx the 0-based index of the target group
+\return GF_TRUE if init segment is present, GF_FALSE otherwise
+*/
+Bool gf_dash_group_has_init_segment(GF_DashClient *dash, u32 group_idx);
+
+//any change to the structure below MUST be reflected in libgpac.py !!
+
+/*! Information passed to DASH custom algorithm*/
+typedef struct
+{
+	/*! last segment download rate in bits per second */
+	u32 download_rate;
+	/*! size of last downloaded segment*/
+	u32 file_size;
+	/*! current playback speed*/
+	Double speed;
+	/*! max supported playback speed according to associated decoder stats*/
+	Double max_available_speed;
+	/*! display width of the video in pixels, 0 if audio stream*/
+	u32 display_width;
+	/*! display height of the video in pixels, 0 if audio stream*/
+	u32 display_height;
+	/*! index of currently selected quality*/
+	u32 active_quality_idx;
+	/*! minimum buffer level in milliseconds below witch rebuffer will happen*/
+	u32 buffer_min_ms;
+	/*! maximum buffer level allowed in milliseconds. Packets won't get dropped if overflow, but the algorithm should try not to overflow this buffer*/
+	u32 buffer_max_ms;
+	/*! current buffer level in milliseconds*/
+	u32 buffer_occupancy_ms;
+	/*! degradation hint, 0 means no degradation, 100 means tile completely hidden*/
+	u32 quality_degradation_hint;
+	/*! cumulated download rate of all active groups - 0 means all files are local*/
+	u32 total_rate;
+} GF_DASHCustomAlgoInfo;
+
+/*! Callback function for custom rate adaptation
+\param udta user data
+\param group_idx index of group to adapt
+\param base_group_idx index of associated base group if group is a dependent group
+\param force_lower_complexity set to true if the dash client would like a lower complexity
+\param stats statistics for last downloaded segment
+\return value can be:
+- the index of the new quality to select (as listed in group.reps[])
+- `-1` to not take decision now and postpone it until dependent groups are done
+- `-2` to disable quality
+- any other negative value means error
+ */
+typedef s32 (*gf_dash_rate_adaptation)(void *udta, u32 group_idx, u32 base_group_idx, Bool force_lower_complexity, GF_DASHCustomAlgoInfo *stats);
+
+/*! Callback function for custom rate monitor, not final yet
+\param udta user data
+\param group_idx index of group to adapt
+\param bits_per_sec estimated download rate (not premultiplied by playback speed)
+\param total_bytes size of segment being downloaded, 0 if unknown
+\param bytes_done bytes received for segment
+\param us_since_start microseconds ellapse since segment was sheduled for download
+\param buffer_dur_ms current buffer duration in milliseconds
+\param current_seg_dur duration of segment being downloaded, 0 if unknown
+\return quality index (>=0) to switch to after abort, -1 to do nothing (no abort), -2 for internal algorithms having already setup the desired quality and requesting only abort
+ */
+typedef s32 (*gf_dash_download_monitor)(void *udta, u32 group_idx, u32 bits_per_sec, u64 total_bytes, u64 bytes_done, u64 us_since_start, u32 buffer_dur_ms, u32 current_seg_dur);
+
+
+/*! sets custom rate adaptation logic
+\param dash the target dash client
+\param udta user data to pass back to callback functions
+\param algo_custom rate adaptation custom logic
+\param download_monitor_custom download monitor custom logic
+ */
+void gf_dash_set_algo_custom(GF_DashClient *dash, void *udta,
+		gf_dash_rate_adaptation algo_custom,
+		gf_dash_download_monitor download_monitor_custom);
 
 
 #endif //GPAC_DISABLE_DASH_CLIENT

@@ -1807,8 +1807,6 @@ static void load_line_nv21(char *src_bits, u32 x_offset, u32 y_offset, u32 y_pit
 	gf_yuv_load_lines_nv12_nv21(dst_bits, 4*width, pY, pU+1, pU, y_pitch, width, dst_yuv);
 }
 
-static void gf_cmx_apply_argb(GF_ColorMatrix *_this, u8 *a_, u8 *r_, u8 *g_, u8 *b_);
-
 //#define COLORKEY_MPEG4_STRICT
 
 static Bool format_is_yuv(u32 in_pf)
@@ -1819,6 +1817,7 @@ static Bool format_is_yuv(u32 in_pf)
 	case GF_PIXEL_UYVY:
 	case GF_PIXEL_VYUY:
 	case GF_PIXEL_YUV:
+	case GF_PIXEL_YVU:
 	case GF_PIXEL_YUV_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
@@ -1885,15 +1884,22 @@ GF_Err gf_stretch_bits(GF_VideoSurface *dst, GF_VideoSurface *src, GF_Window *ds
 					e = color_write_yuv422_10_to_yuv422(dst, src, src_wnd, GF_FALSE);
 				else if (dst->pixel_format == GF_PIXEL_YUV)
 					e = color_write_yuv422_10_to_yuv(dst, src, src_wnd, GF_FALSE);
+				else if (dst->pixel_format == GF_PIXEL_YVU)
+					e = color_write_yuv422_10_to_yuv(dst, src, src_wnd, GF_TRUE);
 				break;
 			case GF_PIXEL_YUV444_10:
 				if (dst->pixel_format == GF_PIXEL_YUV444)
 					e = color_write_yuv444_10_to_yuv444(dst, src, src_wnd, GF_FALSE);
 				else if (dst->pixel_format == GF_PIXEL_YUV)
 					e = color_write_yuv444_10_to_yuv(dst, src, src_wnd, GF_FALSE);
+				else if (dst->pixel_format == GF_PIXEL_YVU)
+					e = color_write_yuv444_10_to_yuv(dst, src, src_wnd, GF_TRUE);
 				break;
 			case GF_PIXEL_YUV:
 				e = color_write_yuv420_to_yuv(dst, src, src_wnd, GF_FALSE);
+				break;
+			case GF_PIXEL_YVU:
+				e = color_write_yuv420_to_yuv(dst, src, src_wnd, GF_TRUE);
 				break;
 			case GF_PIXEL_YUV422:
 				e = color_write_yuv422_to_yuv(dst, src, src_wnd, GF_FALSE);
@@ -1986,6 +1992,7 @@ GF_Err gf_stretch_bits(GF_VideoSurface *dst, GF_VideoSurface *src, GF_Window *ds
 		load_line = load_line_rgbd;
 		break;
 	case GF_PIXEL_YUV:
+	case GF_PIXEL_YVU:
 		yuv2rgb_init();
 		yuv_planar_type = 1;
 		break;
@@ -2112,6 +2119,9 @@ GF_Err gf_stretch_bits(GF_VideoSurface *dst, GF_VideoSurface *src, GF_Window *ds
 	dst_w = dst_wnd ? dst_wnd->w : dst->width;
 	dst_h = dst_wnd ? dst_wnd->h : dst->height;
 
+	if (!src_w || !src_h || !dst_w || !dst_h)
+		return GF_OK;
+		
 	if (yuv_planar_type && (src_w%2)) src_w++;
 
 	tmp = (u8 *) gf_malloc(sizeof(u8) * src_w * (yuv_planar_type ? 8 : 4) );
@@ -2327,6 +2337,7 @@ GF_Err gf_stretch_bits(GF_VideoSurface *dst, GF_VideoSurface *src, GF_Window *ds
 	return GF_OK;
 }
 
+#endif // GPAC_DISABLE_PLAYER
 
 
 /*
@@ -2429,7 +2440,8 @@ void gf_cmx_multiply(GF_ColorMatrix *_this, GF_ColorMatrix *w)
 
 #define CLIP_COMP(val)	{ if (val<0) { val=0; } else if (val>FIX_ONE) { val=FIX_ONE;} }
 
-static void gf_cmx_apply_argb(GF_ColorMatrix *_this, u8 *a_, u8 *r_, u8 *g_, u8 *b_)
+GF_EXPORT
+void gf_cmx_apply_argb(GF_ColorMatrix *_this, u8 *a_, u8 *r_, u8 *g_, u8 *b_)
 {
 	Fixed _a, _r, _g, _b, a, r, g, b;
 	if (!_this || _this->identity) return;
@@ -2523,6 +2535,8 @@ void gf_cmx_apply_fixed(GF_ColorMatrix *_this, Fixed *a, Fixed *r, Fixed *g, Fix
 	*b = INT2FIX(GF_COL_B(col)) / 255;
 }
 
+
+#ifndef GPAC_DISABLE_PLAYER
 
 
 //intrinsic code segfaults on 32 bit, need to check why
@@ -3500,6 +3514,7 @@ static Bool is_planar_yuv(u32 pf)
 {
 	switch (pf) {
 	case GF_PIXEL_YUV:
+	case GF_PIXEL_YVU:
 	case GF_PIXEL_YUV_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
@@ -4310,12 +4325,16 @@ GF_Color gf_color_parse(const char *name)
 {
 	u32 i, count;
 	u32 res;
+	if (!strcmp(name, "none") )
+		return 0;
 	if ((name[0]=='$') || (name[0]=='#')) {
 		sscanf(name+1, "%x", &res);
+		if (strlen(name+1) == 8) return res;
 		return res | 0xFF000000;
 	}
 	if (!strnicmp(name, "0x", 2) ) {
 		sscanf(name+2, "%x", &res);
+		if (strlen(name+2) == 8) return res;
 		return res | 0xFF000000;
 	}
 
@@ -4326,7 +4345,7 @@ GF_Color gf_color_parse(const char *name)
 			return res;
 		}
 	}
-
+	GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Unknown color code %s, using 0x00000000\n", name));
 	return 0;
 
 }

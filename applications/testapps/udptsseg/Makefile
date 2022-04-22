@@ -4,12 +4,12 @@ vpath %.c $(SRC_PATH)/applications/udptsseg
 
 CFLAGS= $(OPTFLAGS) -I"$(SRC_PATH)/include"
 
-ifeq ($(DEBUGBUILD), yes)
+ifeq ($(DEBUGBUILD),yes)
 CFLAGS+=-g
 LDFLAGS+=-g
 endif
 
-ifeq ($(GPROFBUILD), yes)
+ifeq ($(GPROFBUILD),yes)
 CFLAGS+=-pg
 LDFLAGS+=-pg
 endif
@@ -22,7 +22,7 @@ LINKFLAGS=-L../../bin/gcc -L../../extra_lib/lib/gcc
 ifeq ($(CONFIG_WIN32),yes)
 EXE=.exe
 PROG=udptsseg$(EXE)
-ifeq ($(MP4BOX_STATIC),yes)
+ifeq ($(STATIC_BINARY),yes)
 LINKFLAGS+=-lgpac_static -lz $(EXTRALIBS)
 else
 LINKFLAGS+=-lgpac
@@ -30,7 +30,7 @@ endif
 else
 EXT=
 PROG=udptsseg
-ifeq ($(MP4BOX_STATIC),yes)
+ifeq ($(STATIC_BINARY),yes)
 LINKFLAGS+=-lgpac_static -lz $(EXTRALIBS)
 else
 LINKFLAGS+=-lgpac
@@ -42,7 +42,7 @@ ifeq ($(CONFIG_JS),no)
 else
 SCENEGRAPH_CFLAGS+=$(JS_FLAGS)
 ifeq ($(CONFIG_JS),local)
-NEED_LOCAL_LIB="yes"
+NEED_LOCAL_LIB=yes
 endif
 LINKFLAGS+=$(JS_LIBS)
 endif

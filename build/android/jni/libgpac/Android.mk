@@ -1,5 +1,4 @@
 LOCAL_PATH:= $(call my-dir)
-APP_ABI          := armeabi armeabi-v7a x86
 
 include $(CLEAR_VARS)
 include $(LOCAL_PATH)/../common.mk
@@ -15,19 +14,19 @@ LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include/freetype/freety
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include/jpeg/
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include/png/
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include/faad
-LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include/ffmpeg_android/
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include/openjpeg
++LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include/openssl_android/
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../modules
 
 LOCAL_LDLIBS    += -L$(LOCAL_PATH)/../../../../extra_lib/lib/android/$(TARGET_ARCH_ABI)
 LOCAL_LDLIBS    += -lGLESv2 -ldl
-LOCAL_LDLIBS    += -lft2 -ljpegdroid -lopenjpeg -lpng -lfaad -lmad -lz
+LOCAL_LDLIBS    += -lft2 -ljpegdroid -lopenjpeg -lpng -lfaad -lmad -lnghttp2 -lz -lssl -lcrypto
 
 #ffmpeg
 LOCAL_LDLIBS    += -lavcodec -lavformat -lswresample -lavfilter -lavutil -lavdevice -lswscale
 
 #mediacodec - removed  ljavaenv from original settings
-LOCAL_LDLIBS    += -llog -ldl -lOpenMAXAL -lmediandk -landroid -lGLESv2
+LOCAL_LDLIBS    += -llog -lOpenMAXAL -lmediandk -landroid
 
 #LOCAL_SHARED_LIBRARIES    += -L$(LOCAL_PATH)/../../../../extra_lib/lib/android/$(TARGET_ARCH_ABI)
 #LOCAL_SHARED_LIBRARIES    += -lGLESv2 -ldl
@@ -40,6 +39,8 @@ LOCAL_CFLAGS +=	-DGPAC_HAVE_CONFIG_H
 LOCAL_CFLAGS += -DNO_MALLINFO
 LOCAL_CFLAGS += -DGPAC_CONFIG_ANDROID
 LOCAL_CFLAGS += -DGPAC_DISABLE_REMOTERY
+#for now QJS libc is disabled on android
+LOCAL_CFLAGS += -DGPAC_DISABLE_QJS_LIBC
 
 #LOCAL_CFLAGS += -DGPAC_FIXED_POINT
 
@@ -150,6 +151,8 @@ LOCAL_SRC_FILES := \
 	../../../../src/filter_core/filter_register.c \
 	../../../../src/filter_core/filter_session.c \
 	../../../../src/filter_core/filter_session_js.c \
+	../../../../src/filters/bs_agg.c \
+	../../../../src/filters/bs_split.c \
 	../../../../src/filters/bsrw.c \
 	../../../../src/filters/compose.c \
 	../../../../src/filters/dasher.c \
@@ -196,7 +199,7 @@ LOCAL_SRC_FILES := \
 	../../../../src/filters/filelist.c \
 	../../../../src/filters/hevcmerge.c \
 	../../../../src/filters/hevcsplit.c \
-	../../../../src/filters/in_atsc.c \
+	../../../../src/filters/in_route.c \
 	../../../../src/filters/in_dvb4linux.c \
 	../../../../src/filters/in_file.c \
 	../../../../src/filters/in_http.c \
@@ -207,6 +210,7 @@ LOCAL_SRC_FILES := \
 	../../../../src/filters/in_rtp_stream.c \
 	../../../../src/filters/in_sock.c \
 	../../../../src/filters/inspect.c \
+	../../../../src/filters/io_fcryp.c \
 	../../../../src/filters/isoffin_load.c \
 	../../../../src/filters/isoffin_read.c \
 	../../../../src/filters/isoffin_read_ch.c \
@@ -217,10 +221,12 @@ LOCAL_SRC_FILES := \
 	../../../../src/filters/mux_avi.c \
 	../../../../src/filters/mux_gsf.c \
 	../../../../src/filters/mux_isom.c \
+	../../../../src/filters/mux_ogg.c \
 	../../../../src/filters/mux_ts.c \
 	../../../../src/filters/out_audio.c \
 	../../../../src/filters/out_file.c \
 	../../../../src/filters/out_http.c \
+	../../../../src/filters/out_route.c \
 	../../../../src/filters/out_rtp.c \
 	../../../../src/filters/out_rtsp.c \
 	../../../../src/filters/out_sock.c \
@@ -232,6 +238,7 @@ LOCAL_SRC_FILES := \
 	../../../../src/filters/reframe_h263.c \
 	../../../../src/filters/reframe_img.c \
 	../../../../src/filters/reframe_latm.c \
+	../../../../src/filters/reframe_mhas.c \
 	../../../../src/filters/reframe_mp3.c \
 	../../../../src/filters/reframe_mpgvid.c \
 	../../../../src/filters/reframe_nalu.c \
@@ -239,15 +246,20 @@ LOCAL_SRC_FILES := \
 	../../../../src/filters/reframe_qcp.c \
 	../../../../src/filters/reframe_rawpcm.c \
 	../../../../src/filters/reframe_rawvid.c \
+	../../../../src/filters/reframe_truehd.c \
 	../../../../src/filters/reframer.c \
 	../../../../src/filters/resample_audio.c \
+	../../../../src/filters/restamp.c \
 	../../../../src/filters/rewind.c \
 	../../../../src/filters/rewrite_adts.c \
+	../../../../src/filters/rewrite_mhas.c \
 	../../../../src/filters/rewrite_mp4v.c \
 	../../../../src/filters/rewrite_nalu.c \
 	../../../../src/filters/rewrite_obu.c \
 	../../../../src/filters/tileagg.c \
+	../../../../src/filters/tilesplit.c \
 	../../../../src/filters/tssplit.c \
+	../../../../src/filters/ttml_conv.c \
 	../../../../src/filters/unit_test_filter.c \
 	../../../../src/filters/vcrop.c \
 	../../../../src/filters/vflip.c \
@@ -255,6 +267,7 @@ LOCAL_SRC_FILES := \
 	../../../../src/filters/write_nhml.c \
 	../../../../src/filters/write_nhnt.c \
 	../../../../src/filters/write_qcp.c \
+	../../../../src/filters/write_tx3g.c \
 	../../../../src/filters/write_vtt.c \
 	../../../../src/ietf/rtcp.c \
 	../../../../src/ietf/rtp.c \
@@ -306,7 +319,7 @@ LOCAL_SRC_FILES := \
 	../../../../src/laser/lsr_enc.c \
 	../../../../src/laser/lsr_tables.c \
 	../../../../src/media_tools/ait.c \
-	../../../../src/media_tools/atsc_dmx.c \
+	../../../../src/media_tools/route_dmx.c \
 	../../../../src/media_tools/avilib.c \
 	../../../../src/media_tools/av_parsers.c \
 	../../../../src/media_tools/crypt_tools.c \
@@ -347,6 +360,7 @@ LOCAL_SRC_FILES := \
 	../../../../src/quickjs/libregexp.c \
 	../../../../src/quickjs/libunicode.c \
 	../../../../src/quickjs/quickjs.c \
+	../../../../src/quickjs/quickjs-libc.c \
 	../../../../src/scenegraph/base_scenegraph.c \
 	../../../../src/scenegraph/commands.c \
 	../../../../src/scenegraph/dom_events.c \

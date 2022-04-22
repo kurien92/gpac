@@ -1,10 +1,8 @@
-
-
 /*
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2017
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -208,7 +206,7 @@ void mediacontrol_pause(GF_ObjectManager *odm)
 
 		if (ctrl_od->addon && (ctrl_od->addon->addon_type==GF_ADDON_TYPE_MAIN)) {
 			gf_clock_pause(ck);
-			gf_scene_select_main_addon(in_scene, ctrl_od, GF_TRUE, gf_clock_time(ck) );
+			gf_scene_select_main_addon(in_scene, ctrl_od, GF_TRUE, gf_clock_time_absolute(ck) );
 		}
 
 		if (ctrl_od->subscene) {
@@ -241,7 +239,7 @@ void mediacontrol_set_speed(GF_ObjectManager *odm, Fixed speed)
 
 		//dynamic scene with speed direction, we need to re-start everything to issue new PLAY requests
 		if (in_scene->is_dynamic_scene && (gf_mulfix(ck->speed, speed) < 0)) {
-			u32 time = gf_clock_time(ck);
+			u64 time = gf_clock_time_absolute(ck);
 			gf_clock_set_speed(ck, speed);
 
 			//enable main addon
@@ -249,7 +247,7 @@ void mediacontrol_set_speed(GF_ObjectManager *odm, Fixed speed)
 				i=0;
 				while ((ctrl_od = (GF_ObjectManager*)gf_list_enum(in_scene->resources, &i))) {
 					if (ctrl_od->addon && (ctrl_od->addon->addon_type==GF_ADDON_TYPE_MAIN)) {
-						gf_scene_select_main_addon(in_scene, ctrl_od, GF_TRUE, gf_clock_time(ck) );
+						gf_scene_select_main_addon(in_scene, ctrl_od, GF_TRUE, time );
 						break;
 					}
 				}
@@ -412,6 +410,12 @@ void RenderMediaControl(GF_Node *node, void *rs, Bool is_destroy)
 			stack->changed = 0;
 			return;
 		}
+		if (stack->stream->connect_state > MO_CONNECT_BUFFERING) {
+			gf_sg_vrml_mf_reset(&stack->control->url, GF_SG_VRML_MFURL);
+			stack->enabled = GF_FALSE;
+			stack->stream = NULL;
+			return;
+		}
 		stack->ck = gf_odm_get_media_clock(stack->stream->odm);
 		/*OD not ready yet*/
 		if (!stack->ck) {
@@ -430,7 +434,7 @@ void RenderMediaControl(GF_Node *node, void *rs, Bool is_destroy)
 		stack->current_seg = 0;
 
 		/*we shouldn't have to restart unless start/stop times have been changed, which is tested below*/
-		need_restart = 0;
+		need_restart = (stack->stream->odm->state==GF_ODM_STATE_PLAY) ? 1 : 0;
 	}
 
 	if ((stack->is_init && !stack->changed) || !stack->control->enabled || !stack->stream) return;
@@ -438,8 +442,10 @@ void RenderMediaControl(GF_Node *node, void *rs, Bool is_destroy)
 
 	/*if not previously enabled and now enabled, switch all other controls off and reactivate*/
 	if (!stack->enabled) {
+		Bool restart;
 		stack->enabled = 1;
-		need_restart = gf_odm_switch_mediacontrol(stack->stream->odm, stack);
+		restart = gf_odm_switch_mediacontrol(stack->stream->odm, stack);
+		if (restart) need_restart = 1;
 	}
 
 	stack->changed = 0;
@@ -522,7 +528,7 @@ void InitMediaControl(GF_Scene *scene, GF_Node *node)
 	MediaControlStack *stack;
 	GF_SAFEALLOC(stack, MediaControlStack);
 	if (!stack) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[Terminal] Failed to allocate media control stack\n"));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_INTERACT, ("[Compositor] Failed to allocate media control stack\n"));
 		return;
 	}
 	stack->changed = 1;
@@ -657,7 +663,7 @@ Bool gf_odm_check_segment_switch(GF_ObjectManager *odm)
 	/*synth media, trigger if end of segment run-time*/
 	if (!odm->type || ((odm->type!=GF_STREAM_VISUAL) && (odm->type!=GF_STREAM_AUDIO))) {
 		GF_Clock *ck = gf_odm_get_media_clock(odm);
-		u32 now = gf_clock_time(ck);
+		u64 now = gf_clock_time_absolute(ck);
 		u64 dur = odm->subscene ? odm->subscene->duration : odm->duration;
 		cur = (GF_Segment *)gf_list_get(ctrl->seg, ctrl->current_seg);
 		if (odm->subscene && odm->subscene->needs_restart) return 0;

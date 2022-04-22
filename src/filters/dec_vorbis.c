@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / XIPH Vorbis decoder filter
@@ -53,6 +53,39 @@ typedef struct
 	Bool has_reconfigured;
 } GF_VorbisDecCtx;
 
+
+void vorbisdec_set_props(GF_VorbisDecCtx *ctx)
+{
+	u32 chan_mask;
+
+	ctx->nb_chan = ctx->vi.channels;
+	ctx->sample_rate = ctx->vi.rate;
+	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_SAMPLE_RATE, &PROP_UINT(ctx->sample_rate) );
+	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_NUM_CHANNELS, &PROP_UINT(ctx->nb_chan) );
+	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_AUDIO_FORMAT, &PROP_UINT(GF_AUDIO_FMT_S16) );
+
+	switch (ctx->vi.channels) {
+	case 1:
+		chan_mask = GF_AUDIO_CH_FRONT_CENTER;
+		break;
+	case 2:
+		chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT;
+		break;
+	case 3:
+		chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER;
+		break;
+	case 4:
+		chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT;
+		break;
+	case 5:
+		chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT;
+		break;
+	case 6:
+		chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_LFE;
+		break;
+	}
+	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CHANNEL_LAYOUT, &PROP_LONGUINT(chan_mask) );
+}
 static GF_Err vorbisdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 {
 	const GF_PropertyValue *p;
@@ -62,8 +95,10 @@ static GF_Err vorbisdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool
 
 
 	if (is_remove) {
-		if (ctx->opid) gf_filter_pid_remove(ctx->opid);
-		ctx->opid = NULL;
+		if (ctx->opid) {
+			gf_filter_pid_remove(ctx->opid);
+			ctx->opid = NULL;
+		}
 		ctx->ipid = NULL;
 		return GF_OK;
 	}
@@ -125,6 +160,7 @@ static GF_Err vorbisdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool
 	vorbis_block_init(&ctx->vd, &ctx->vb);
 	gf_bs_del(bs);
 
+	vorbisdec_set_props(ctx);
 	return GF_OK;
 }
 
@@ -196,38 +232,13 @@ static GF_Err vorbisdec_process(GF_Filter *filter)
 		vorbis_synthesis_blockin(&ctx->vd, &ctx->vb) ;
 
 	if ( (ctx->vi.channels != ctx->nb_chan) || (ctx->vi.rate != ctx->sample_rate) ) {
-		u64 chan_mask = 0;
-		ctx->nb_chan = ctx->vi.channels;
-		ctx->sample_rate = ctx->vi.rate;
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_SAMPLE_RATE, &PROP_UINT(ctx->sample_rate) );
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_NUM_CHANNELS, &PROP_UINT(ctx->nb_chan) );
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_AUDIO_FORMAT, &PROP_UINT(GF_AUDIO_FMT_S16) );
-
-		switch (ctx->vi.channels) {
-		case 1:
-			chan_mask = GF_AUDIO_CH_FRONT_CENTER;
-			break;
-		case 2:
-			chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT;
-			break;
-		case 3:
-			chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER;
-			break;
-		case 4:
-			chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT;
-			break;
-		case 5:
-			chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT;
-			break;
-		case 6:
-			chan_mask = GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_LFE;
-			break;
-		}
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CHANNEL_LAYOUT, &PROP_LONGUINT(chan_mask) );
-
+		vorbisdec_set_props(ctx);
 	}
 	size = (ctx->vd.pcm_current - ctx->vd.pcm_returned) * 2 * ctx->vi.channels;
-	if (size) dst_pck = gf_filter_pck_new_alloc(ctx->opid, size, &buffer);
+	if (size) {
+		dst_pck = gf_filter_pck_new_alloc(ctx->opid, size, &buffer);
+		if (!dst_pck) return GF_OUT_OF_MEM;
+	}
 
 	if (pck && dst_pck) gf_filter_pck_merge_properties(pck, dst_pck);
 
@@ -254,8 +265,7 @@ static GF_Err vorbisdec_process(GF_Filter *filter)
 	gf_filter_pck_set_cts(dst_pck, ctx->last_cts);
 
 	if (ctx->timescale != ctx->sample_rate) {
-		u64 dur = total_samples * ctx->timescale;
-		dur /= ctx->sample_rate;
+		u64 dur = gf_timestamp_rescale(total_samples, ctx->sample_rate, ctx->timescale);
 		gf_filter_pck_set_duration(dst_pck, (u32) dur);
 		ctx->last_cts += dur;
 	} else {

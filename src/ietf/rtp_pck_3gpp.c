@@ -388,6 +388,8 @@ GF_Err gp_rtp_builder_do_tx3g(GP_RTPPacketizer *builder, u8 *data, u32 data_size
 		}
 		return GF_OK;
 	}
+	if (data_size<2) return GF_NON_COMPLIANT_BITSTREAM;
+
 	/*cfg packet*/
 	txt_size = data[0];
 	txt_size <<= 8;
@@ -395,6 +397,7 @@ GF_Err gp_rtp_builder_do_tx3g(GP_RTPPacketizer *builder, u8 *data, u32 data_size
 	/*remove BOM*/
 	pay_start = 2;
 	if (txt_size>2) {
+		if (data_size<4) return GF_NON_COMPLIANT_BITSTREAM;
 		/*seems 3GP only accepts BE UTF-16 (no LE, no UTF32)*/
 		if (((u8) data[2]==(u8) 0xFE) && ((u8) data[3]==(u8) 0xFF)) {
 			is_utf_16 = GF_TRUE;
@@ -811,6 +814,33 @@ GF_Err gp_rtp_builder_do_ac3(GP_RTPPacketizer *builder, u8 *data, u32 data_size,
 		builder->bytesInPacket = 0;
 	}
 
+	return GF_OK;
+}
+
+GF_Err gp_rtp_builder_do_opus(GP_RTPPacketizer *builder, u8 *data, u32 data_size, u8 IsAUEnd, u32 FullAUSize)
+{
+	/*flush*/
+	if (!data) return GF_OK;
+
+	/*fits*/
+	if (data_size > builder->Path_MTU) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_RTP, ("[RTPOpus] Packet size %u larger MTU %u but Opus fragmentation is not yet supported, pacth welcome\n", data_size, builder->Path_MTU ));
+		return GF_NOT_SUPPORTED;
+	}
+	/*send new packet*/
+	builder->rtp_header.TimeStamp = (u32) builder->sl_header.compositionTimeStamp;
+	builder->rtp_header.Marker = 0;
+	builder->rtp_header.SequenceNumber += 1;
+	builder->OnNewPacket(builder->cbk_obj, &builder->rtp_header);
+
+	/*add payload*/
+	if (builder->OnDataReference)
+		builder->OnDataReference(builder->cbk_obj, data_size, 0);
+	else
+		builder->OnData(builder->cbk_obj, data, data_size, GF_FALSE);
+
+	builder->OnPacketDone(builder->cbk_obj, &builder->rtp_header);
+	builder->last_au_sn++;
 	return GF_OK;
 }
 

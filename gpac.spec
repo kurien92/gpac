@@ -1,11 +1,11 @@
 # $Id: gpac.spec,v 1.5 2008-12-02 18:04:42 jeanlf Exp $
 Summary: Framework for production, encoding, delivery and interactive playback of multimedia content
 Name: gpac
-Version: 1.0.0
-Release: 1.0.0
+Version: 2.1-DEV
+Release: 2.1-DEV
 License: LGPL
 Group: Applications/Multimedia
-Source0: gpac-1.0.0.tar.gz
+Source0: gpac-2.1-DEV.tar.gz
 URL: http://gpac.io/
 BuildRoot: %{_tmppath}/%{name}-root
 Requires: SDL
@@ -25,22 +25,26 @@ BuildRequires: SDL-devel
 %{!?_without_mad:BuildRequires: libmad-devel}
 %{!?_without_xvid:BuildRequires: xvidcore-devel}
 %{!?_without_ffmpeg:BuildRequires: ffmpeg-devel}
-%{!?_without_jack:BuildRequires: libjack-devel}
+%{!?_without_jack:BuildRequires: jack-audio-connection-kit}
+
+%global debug_package %{nil}
 
 %description
 
-GPAC is a framework for production, encoding, delivery and interactive playback of multimedia content
+GPAC is a framework for production, encoding, delivery and interactive playback of multimedia content.
 
 GPAC supports many AV codecs, multimedia containers (MP4,fMP4, TS, avi, mov, mpg, mkv ...), complex presentation formats (MPEG-4 Systems, SVG Tiny 1.2, VRML/X3D) and subtitles (SRT, WebVTT, TTXT/TX3G, TTML).
-Supported inputs and outputs are pipes, UDP/TCP/UN sockets, local files, HTTP, RTP/RTSP, TS demuxing (from file, IP or DVB4Linux), ATSC 3.0 ROUTE sessions, desktop grabbing, camera/microphone inputs and any input format supported by FFmpeg.
 
-GPAC features a highly configurable media processing pipeline, and can further be extended using JavaScript.
+Supported inputs and outputs are pipes, UDP/TCP/UN sockets, local files, HTTP, DASH/HLS, RTP/RTSP, MPEG-2 TS, ATSC 3.0 ROUTE sessions, desktop grabbing, camera/microphone inputs and any input format supported by FFmpeg.
+
+GPAC features a highly configurable media processing pipeline extensible through JavaScript, and can be embedded in Python or NodeJS applications.
 
 GPAC is licensed under the GNU Lesser General Public License.
 
 
 Available rpmbuild rebuild options :
---without : freetype faad a52 jpeg png mad xvid ffmpeg
+--without : freetype faad a52 jpeg png mad xvid ffmpeg jack
+
 
 %prep
 %setup -q -n gpac
@@ -63,13 +67,14 @@ rm -rf %{buildroot}
 
 %files
 %defattr(-, root, root)
-%doc AUTHORS BUGS Changelog COPYING README.md TODO
+# %doc Changelog COPYING README.md
 %{_bindir}/*
 %{_libdir}/*
-%{_mandir}/man1/*
+%{_includedir}/*
+%{_datadir}/*
 
 %changelog
-* Jun 16 2020 Jean Le Feuvre
+* Fri Sep 4 2020 Jean Le Feuvre
 - GPAC 1.0 release
 * Fri Jul 3 2015 Jean Le Feuvre
 - Changed to README.md

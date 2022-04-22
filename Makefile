@@ -12,13 +12,14 @@ vpath %.c $(SRC_PATH)
 all:	version
 	$(MAKE) -C src all
 	$(MAKE) -C applications all
-ifneq ($(MP4BOX_STATIC),yes)
+ifneq ($(STATIC_BINARY),yes)
 	$(MAKE) -C modules all
 endif
 
 
 config.mak:
-	./configure
+	@echo "running default configure"
+	@./configure
 
 
 GITREV_PATH:=$(SRC_PATH)/include/gpac/revision.h
@@ -116,34 +117,36 @@ install:
 	$(MAKE) install-lib
 
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/bin"
-	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/gpac$(EXE_SUFFIX) "$(DESTDIR)$(prefix)/bin"
-ifeq ($(DISABLE_ISOFF), no)
+	if [ -f bin/gcc/MP4Box$(EXE_SUFFIX) ] ; then \
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/gpac$(EXE_SUFFIX) "$(DESTDIR)$(prefix)/bin" ; \
+	fi
+ifeq ($(DISABLE_ISOFF),no)
 	if [ -f bin/gcc/MP4Box$(EXE_SUFFIX) ] ; then \
 	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/MP4Box$(EXE_SUFFIX) "$(DESTDIR)$(prefix)/bin" ; \
 	fi
 endif
-ifneq ($(MP4BOX_STATIC), yes)
-ifeq ($(DISABLE_PLAYER), no)
+ifneq ($(STATIC_BINARY),yes)
+ifeq ($(DISABLE_PLAYER),no)
 	if [ -f bin/gcc/MP4Client$(EXE_SUFFIX) ] ; then \
 	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/MP4Client$(EXE_SUFFIX) "$(DESTDIR)$(prefix)/bin" ; \
 	fi
 endif
 endif
-	$(INSTALL) -d "$(DESTDIR)$(moddir)"
-ifneq ($(MP4BOX_STATIC),yes)
-	$(INSTALL) bin/gcc/gm_*$(DYN_LIB_SUFFIX) "$(DESTDIR)$(moddir)" || true
-	$(INSTALL) bin/gcc/gf_*$(DYN_LIB_SUFFIX) "$(DESTDIR)$(moddir)" || true
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(lib_dir)/$(moddir)"
+ifneq ($(STATIC_BINARY),yes)
+	$(INSTALL) bin/gcc/gm_*$(DYN_LIB_SUFFIX) "$(DESTDIR)$(prefix)/$(lib_dir)/$(moddir)" || true
+	$(INSTALL) bin/gcc/gf_*$(DYN_LIB_SUFFIX) "$(DESTDIR)$(prefix)/$(lib_dir)/$(moddir)" || true
 ifeq ($(CONFIG_OPENHEVC),yes)
-	cp -a bin/gcc/libopenhevc* $(DESTDIR)$(prefix)/$(libdir)/ || true
+	cp -a bin/gcc/libopenhevc* $(DESTDIR)$(prefix)/$(lib_dir)/ || true
 endif
 
 endif
-	$(INSTALL) -d "$(DESTDIR)$(mandir)"
-	$(INSTALL) -d "$(DESTDIR)$(mandir)/man1"
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/mp4box.1 $(DESTDIR)$(mandir)/man1/
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/mp4client.1 $(DESTDIR)$(mandir)/man1/
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/gpac.1 $(DESTDIR)$(mandir)/man1/
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/gpac-filters.1 $(DESTDIR)$(mandir)/man1/
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(man_dir)"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(man_dir)/man1"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/mp4box.1 $(DESTDIR)$(prefix)/$(man_dir)/man1/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/mp4client.1 $(DESTDIR)$(prefix)/$(man_dir)/man1/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/gpac.1 $(DESTDIR)$(prefix)/$(man_dir)/man1/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/gpac-filters.1 $(DESTDIR)$(prefix)/$(man_dir)/man1/
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac"
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/res"
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/gui"
@@ -151,60 +154,69 @@ endif
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/gui/extensions"
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/shaders"
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/scripts"
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac.mp4 $(DESTDIR)$(prefix)/share/gpac/res/
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac_cfg_test.mp4 $(DESTDIR)$(prefix)/share/gpac/res/
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac.png $(DESTDIR)$(prefix)/share/gpac/res/
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/python"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/vis"
 	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/default.cfg $(DESTDIR)$(prefix)/share/gpac/
 
 ifneq ($(CONFIG_DARWIN),yes)
-	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/pixmaps"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/icons/hicolor/128x128/apps"
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/applications"
 
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac.png "$(DESTDIR)$(prefix)/share/pixmaps/"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac.png "$(DESTDIR)$(prefix)/share/icons/hicolor/128x128/apps/"
 	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gpac.desktop "$(DESTDIR)$(prefix)/share/applications/"
 endif
 
 	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gui/gui.bt "$(DESTDIR)$(prefix)/share/gpac/gui/"
 	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gui/gui.js "$(DESTDIR)$(prefix)/share/gpac/gui/"
 	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gui/gwlib.js "$(DESTDIR)$(prefix)/share/gpac/gui/"
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/scripts/webvtt-renderer.js "$(DESTDIR)$(prefix)/share/gpac/scripts/"
-	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/scripts/ttml-renderer.js "$(DESTDIR)$(prefix)/share/gpac/scripts/"
 
 
 ifeq ($(CONFIG_DARWIN),yes)
 	cp $(SRC_PATH)/share/gui/icons/* "$(DESTDIR)$(prefix)/share/gpac/gui/icons/"
 	cp -R $(SRC_PATH)/share/gui/extensions/* "$(DESTDIR)$(prefix)/share/gpac/gui/extensions/"
 	cp $(SRC_PATH)/share/shaders/* "$(DESTDIR)$(prefix)/share/gpac/shaders/"
+	cp -R $(SRC_PATH)/share/scripts/* "$(DESTDIR)$(prefix)/share/gpac/scripts/"
+	cp -R $(SRC_PATH)/share/python/* "$(DESTDIR)$(prefix)/share/gpac/python/"
+	cp $(SRC_PATH)/share/res/* "$(DESTDIR)$(prefix)/share/gpac/res/"
+	cp -R $(SRC_PATH)/share/vis/* "$(DESTDIR)$(prefix)/share/gpac/vis/"
 else
 	cp --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/gui/icons/* $(DESTDIR)$(prefix)/share/gpac/gui/icons/
 	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/gui/extensions/* $(DESTDIR)$(prefix)/share/gpac/gui/extensions/
 	cp --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/shaders/* $(DESTDIR)$(prefix)/share/gpac/shaders/
+	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/scripts/* $(DESTDIR)$(prefix)/share/gpac/scripts/
+	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/python/* $(DESTDIR)$(prefix)/share/gpac/python/
+	cp --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/res/* $(DESTDIR)$(prefix)/share/gpac/res/
+	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/vis/* $(DESTDIR)$(prefix)/share/gpac/vis/
 endif
 
 lninstall:
 	$(INSTALL) -d "$(DESTDIR)$(prefix)"
-	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(libdir)"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(lib_dir)"
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/bin"
 	ln -sf $(BUILD_PATH)/bin/gcc/gpac$(EXE_SUFFIX) $(DESTDIR)$(prefix)/bin/gpac$(EXE_SUFFIX)
-ifeq ($(DISABLE_ISOFF), no)
+ifeq ($(DISABLE_ISOFF),no)
 	ln -sf $(BUILD_PATH)/bin/gcc/MP4Box$(EXE_SUFFIX) $(DESTDIR)$(prefix)/bin/MP4Box$(EXE_SUFFIX)
 endif
-ifneq ($(MP4BOX_STATIC),yes)
-ifeq ($(DISABLE_PLAYER), no)
+ifneq ($(STATIC_BINARY),yes)
+ifeq ($(DISABLE_PLAYER),no)
 	ln -sf $(BUILD_PATH)/bin/gcc/MP4Client$(EXE_SUFFIX) $(DESTDIR)$(prefix)/bin/MP4Client$(EXE_SUFFIX)
 endif
 endif
 ifeq ($(CONFIG_DARWIN),yes)
-	ln -s $(BUILD_PATH)/bin/gcc/libgpac$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX)
-	ln -sf $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_MAJOR)$(DYN_LIB_SUFFIX)
-	ln -sf $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX)
+	ln -s $(BUILD_PATH)/bin/gcc/libgpac$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX)
+	ln -sf $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.$(VERSION_MAJOR)$(DYN_LIB_SUFFIX)
+	ln -sf $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac$(DYN_LIB_SUFFIX)
+
+	ln -s $(BUILD_PATH)/bin/gcc/ $(DESTDIR)$(prefix)/$(lib_dir)/gpac
+	ln -s $(SRC_PATH)/share/ $(DESTDIR)$(prefix)/share/gpac
 else
-	ln -s $(BUILD_PATH)/bin/gcc/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME)
-	ln -sf $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac.so.$(VERSION_MAJOR)
-	ln -sf $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac.so
+	ln -s $(BUILD_PATH)/bin/gcc/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME)
+	ln -sf $(DESTDIR)$(prefix)/$(lib_dir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.so.$(VERSION_MAJOR)
+	ln -sf $(DESTDIR)$(prefix)/$(lib_dir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.so
+	ln -s $(BUILD_PATH)/bin/gcc/ $(DESTDIR)$(prefix)/$(lib_dir)/gpac
 
 	ln -s $(SRC_PATH)/share/ $(DESTDIR)$(prefix)/share/gpac
-	ln -sf $(DESTDIR)$(prefix)/share/gpac/res/gpac.png $(DESTDIR)/usr/share/pixmaps/gpac.png
+	ln -sf $(DESTDIR)$(prefix)/share/gpac/res/gpac.png $(DESTDIR)/usr/share/icons/hicolor/128x128/apps/gpac.png
 	ln -sf $(SRC_PATH)/share/gpac.desktop $(DESTDIR)/usr/share/applications/
 
 ifeq ($(DESTDIR)$(prefix),$(prefix))
@@ -216,26 +228,28 @@ endif
 uninstall:
 	$(MAKE) -C applications uninstall
 	$(MAKE) uninstall-lib
-	rm -rf $(DESTDIR)$(moddir)
+	rm -rf $(DESTDIR)$(prefix)/$(lib_dir)/$(moddir)
 	rm -rf $(DESTDIR)$(prefix)/bin/MP4Box
 	rm -rf $(DESTDIR)$(prefix)/bin/MP4Client
 	rm -rf $(DESTDIR)$(prefix)/bin/gpac
-	rm -rf $(DESTDIR)$(mandir)/man1/mp4box.1
-	rm -rf $(DESTDIR)$(mandir)/man1/mp4client.1
-	rm -rf $(DESTDIR)$(mandir)/man1/gpac.1
-	rm -rf $(DESTDIR)$(mandir)/man1/gpac-filters.1
+	rm -rf $(DESTDIR)$(prefix)/$(man_dir)/man1/mp4box.1
+	rm -rf $(DESTDIR)$(prefix)/$(man_dir)/man1/mp4client.1
+	rm -rf $(DESTDIR)$(prefix)/$(man_dir)/man1/gpac.1
+	rm -rf $(DESTDIR)$(prefix)/$(man_dir)/man1/gpac-filters.1
 	rm -rf $(DESTDIR)$(prefix)/share/gpac
-	rm -rf $(DESTDIR)$(prefix)/share/pixmaps/gpac.png
+	rm -rf $(DESTDIR)$(prefix)/share/icons/hicolor/128x128/apps/gpac.png
 	rm -rf $(DESTDIR)$(prefix)/share/applications/gpac.desktop
 
 
 installdylib:
-ifneq ($(MP4BOX_STATIC),yes)
+ifneq ($(STATIC_BINARY),yes)
 
-	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(libdir)"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(lib_dir)"
 
 ifeq ($(CONFIG_WIN32),yes)
-	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/libgpac.dll.a $(DESTDIR)$(prefix)/$(libdir)
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/bin"
+
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/libgpac.dll.a $(DESTDIR)$(prefix)/$(lib_dir)
 	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/libgpac.dll $(DESTDIR)$(prefix)/bin
 else
 
@@ -244,13 +258,13 @@ ifeq ($(DEBUGBUILD),no)
 endif
 
 ifeq ($(CONFIG_DARWIN),yes)
-	$(INSTALL) -m 755 bin/gcc/libgpac$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX)
-	ln -sf libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_MAJOR)$(DYN_LIB_SUFFIX)
-	ln -sf libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX)
+	$(INSTALL) -m 755 bin/gcc/libgpac$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX)
+	ln -sf libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.$(VERSION_MAJOR)$(DYN_LIB_SUFFIX)
+	ln -sf libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac$(DYN_LIB_SUFFIX)
 else
-	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME)
-	ln -sf libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac.so.$(VERSION_MAJOR)
-	ln -sf libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac.so
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME)
+	ln -sf libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.so.$(VERSION_MAJOR)
+	ln -sf libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(lib_dir)/libgpac.so
 ifeq ($(DESTDIR)$(prefix),$(prefix))
 	ldconfig || true
 endif
@@ -262,7 +276,7 @@ endif
 
 
 uninstalldylib:
-	rm -rf $(DESTDIR)$(prefix)/$(libdir)/libgpac*
+	rm -rf $(DESTDIR)$(prefix)/$(lib_dir)/libgpac*
 ifeq ($(CONFIG_WIN32),yes)
 	rm -rf "$(DESTDIR)$(prefix)/bin/libgpac*"
 endif
@@ -278,16 +292,16 @@ install-lib:
 
 	$(INSTALL) $(INSTFLAGS) -m 644 config.h "$(DESTDIR)$(prefix)/include/gpac/configuration.h" || true
 
-ifeq ($(GPAC_ENST), yes)
+ifeq ($(GPAC_ENST),yes)
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/include/gpac/enst"
 	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/include/gpac/enst/*.h "$(DESTDIR)$(prefix)/include/gpac/enst"
 endif
 
-	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(libdir)"
-	$(INSTALL) $(INSTFLAGS) -m 644 "./bin/gcc/libgpac_static.a" "$(DESTDIR)$(prefix)/$(libdir)" || true
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(lib_dir)"
+	$(INSTALL) $(INSTFLAGS) -m 644 "./bin/gcc/libgpac_static.a" "$(DESTDIR)$(prefix)/$(lib_dir)" || true
 
-	$(INSTALL) -d $(DESTDIR)$(prefix)/$(libdir)/pkgconfig
-	$(INSTALL) $(INSTFLAGS) -m 644 gpac.pc "$(DESTDIR)$(prefix)/$(libdir)/pkgconfig"
+	$(INSTALL) -d $(DESTDIR)$(prefix)/$(lib_dir)/pkgconfig
+	$(INSTALL) $(INSTFLAGS) -m 644 gpac.pc "$(DESTDIR)$(prefix)/$(lib_dir)/pkgconfig"
 
 	$(MAKE) installdylib
 
@@ -297,8 +311,8 @@ uninstall-lib:
 	rm -rf "$(DESTDIR)$(prefix)/include/gpac/modules"
 	rm -rf "$(DESTDIR)$(prefix)/include/gpac/enst"
 	rm -rf "$(DESTDIR)$(prefix)/include/gpac"
-	rm -f  "$(DESTDIR)$(prefix)/$(libdir)/libgpac_static.a"
-	rm -f  "$(DESTDIR)$(prefix)/$(libdir)/pkgconfig/gpac.pc"
+	rm -f  "$(DESTDIR)$(prefix)/$(lib_dir)/libgpac_static.a"
+	rm -f  "$(DESTDIR)$(prefix)/$(lib_dir)/pkgconfig/gpac.pc"
 	$(MAKE) uninstalldylib
 
 ifeq ($(CONFIG_DARWIN),yes)

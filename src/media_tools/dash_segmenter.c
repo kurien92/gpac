@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre , Cyril Concolato
- *			Copyright (c) Telecom ParisTech 2000-2018
+ *			Copyright (c) Telecom ParisTech 2000-2021
  *					All rights reserved
  *
  *  This file is part of GPAC / Media Tools sub-project
@@ -61,7 +61,6 @@ struct __gf_dash_segmenter
 	Bool daisy_chain_sidx, use_ssix;
 
 	Bool fragments_start_with_rap;
-	char *tmpdir;
 	Double mpd_update_time;
 	s32 time_shift_depth;
 	u32 min_buffer_time;
@@ -104,6 +103,7 @@ struct __gf_dash_segmenter
 	Bool enable_mix_codecs;
 	Bool enable_sar_mix;
 	Bool check_duration;
+	Bool merge_last_seg;
 
 	const char *dash_state;
 
@@ -114,6 +114,7 @@ struct __gf_dash_segmenter
 	u32 print_stats_graph;
 	s32 dash_filter_idx_plus_one;
 	u32 last_prog;
+	Bool keep_utc;
 };
 
 
@@ -140,7 +141,6 @@ GF_DASHSegmenter *gf_dasher_new(const char *mpdName, GF_DashProfile dash_profile
 	dasher->mpd_name = gf_strdup(mpdName);
 
 	dasher->dash_scale = dash_timescale ? dash_timescale : 1000;
-	if (tmp_dir) dasher->tmpdir = gf_strdup(tmp_dir);
 	dasher->profile = dash_profile;
 	dasher->dash_state = dasher_context_file;
 	dasher->inputs = gf_list_new();
@@ -160,6 +160,7 @@ void gf_dasher_clean_inputs(GF_DASHSegmenter *dasher)
 {
 	gf_list_reset(dasher->inputs);
 	if (dasher->fsess) {
+		gf_fs_print_unused_args(dasher->fsess, "smode");
 		gf_fs_del(dasher->fsess);
 		dasher->fsess = NULL;
 	}
@@ -170,7 +171,6 @@ void gf_dasher_del(GF_DASHSegmenter *dasher)
 {
 	if (dasher->seg_rad_name) gf_free(dasher->seg_rad_name);
 	gf_dasher_clean_inputs(dasher);
-	gf_free(dasher->tmpdir);
 	gf_free(dasher->mpd_name);
 	if (dasher->title) gf_free(dasher->title);
 	if (dasher->moreInfoURL) gf_free(dasher->moreInfoURL);
@@ -273,9 +273,9 @@ GF_EXPORT
 GF_Err gf_dasher_set_durations(GF_DASHSegmenter *dasher, Double default_segment_duration, Double default_fragment_duration, Double sub_duration)
 {
 	if (!dasher) return GF_BAD_PARAM;
-	dasher->segment_duration = default_segment_duration * 1000 / dasher->dash_scale;
+	dasher->segment_duration = default_segment_duration;
 	if (default_fragment_duration)
-		dasher->fragment_duration = default_fragment_duration * 1000 / dasher->dash_scale;
+		dasher->fragment_duration = default_fragment_duration;
 	else
 		dasher->fragment_duration = dasher->segment_duration;
 	dasher->sub_duration = sub_duration;
@@ -308,6 +308,14 @@ GF_Err gf_dasher_print_session_info(GF_DASHSegmenter *dasher, u32 fs_print_flags
 
 }
 
+GF_EXPORT
+GF_Err gf_dasher_keep_source_utc(GF_DASHSegmenter *dasher, Bool keep_utc)
+{
+	if (!dasher) return GF_BAD_PARAM;
+	dasher->keep_utc = keep_utc;
+	return GF_OK;
+
+}
 
 GF_EXPORT
 GF_Err gf_dasher_enable_sidx(GF_DASHSegmenter *dasher, Bool enable_sidx, u32 subsegs_per_sidx, Bool daisy_chain_sidx, Bool use_ssix)
@@ -446,6 +454,14 @@ GF_Err gf_dasher_set_split_mode(GF_DASHSegmenter *dasher, GF_DASH_SplitMode spli
 }
 
 GF_EXPORT
+GF_Err gf_dasher_set_last_segment_merge(GF_DASHSegmenter *dasher, Bool merge_last_seg)
+{
+	if (!dasher) return GF_BAD_PARAM;
+	dasher->merge_last_seg = merge_last_seg;
+	return GF_OK;
+}
+
+GF_EXPORT
 GF_Err gf_dasher_set_cues(GF_DASHSegmenter *dasher, const char *cues_file, Bool strict_cues)
 {
 	dasher->cues_file = cues_file;
@@ -468,6 +484,8 @@ GF_Err gf_dasher_add_input(GF_DASHSegmenter *dasher, const GF_DashSegmenterInput
 	gf_list_add(dasher->inputs, (void *) input);
 	return GF_OK;
 }
+
+extern char gf_prog_lf;
 
 static Bool on_dasher_event(void *_udta, GF_Event *evt)
 {
@@ -495,9 +513,9 @@ static Bool on_dasher_event(void *_udta, GF_Event *evt)
 	dasher->last_prog = stats.percent / 100;
 
 	if ( stats.status) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("Dashing %s\r", stats.status));
+		GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("Dashing %s%c", stats.status, gf_prog_lf));
 	} else if (stats.percent>0) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("Dashing: % 2.2f %%\r", ((Double)stats.percent) / 100));
+		GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("Dashing: % 2.2f %%%c", ((Double)stats.percent) / 100, gf_prog_lf));
 	}
 	return GF_FALSE;
 }
@@ -507,9 +525,10 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 {
 	GF_Err e;
 	u32 i, count;
-	char *sep_ext;
+	char *sep_ext, *o_sep_ext=NULL;
 	char *args=NULL, szArg[1024];
 	Bool multi_period = GF_FALSE;
+	Bool use_filter_chains = GF_FALSE;
 
 	if (!dasher->mpd_name) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[DASH] Missing MPD name\n"));
@@ -530,19 +549,32 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 		return GF_OUT_OF_MEM;
 	}
 
-	sep_ext = gf_url_colon_suffix(dasher->mpd_name);
-	if (sep_ext) {
-		if (sep_ext[1] == '\\') sep_ext = strchr(sep_ext+1, ':');
-		else if (sep_ext[1]=='/') {
-			sep_ext = strchr(sep_ext+1, '/');
-			if (sep_ext) sep_ext = strchr(sep_ext, ':');
-		}
-	}
+
+	sep_ext = strstr(dasher->mpd_name, ":gpac:");
 	if (sep_ext) {
 		sep_ext[0] = 0;
+		o_sep_ext = sep_ext;
+		sep_ext+=5;
+	} else {
+		sep_ext = gf_url_colon_suffix(dasher->mpd_name, '=');
+		if (sep_ext) {
+			if (sep_ext[1] == '\\') sep_ext = strchr(sep_ext+1, ':');
+			else if (sep_ext[1]=='/') {
+				sep_ext = strchr(sep_ext+1, '/');
+				if (sep_ext) sep_ext = strchr(sep_ext, ':');
+			}
+		}
+		if (sep_ext) {
+			sep_ext[0] = 0;
+			o_sep_ext = sep_ext;
+		}
 	}
 
-	sprintf(szArg, "segdur=%g", dasher->segment_duration);
+	if (dasher->segment_duration == (u32) dasher->segment_duration) {
+		sprintf(szArg, "segdur=%u/%u", (u32) dasher->segment_duration, dasher->dash_scale);
+	} else {
+		sprintf(szArg, "segdur=%g", dasher->segment_duration/dasher->dash_scale);
+	}
 	e = gf_dynstrcat(&args, szArg, ":");
 
 	if (sep_ext)
@@ -571,6 +603,9 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 	case GF_DASH_BSMODE_INBAND:
 		e |= gf_dynstrcat(&args, "bs_switch=inband", ":");
 		break;
+	case GF_DASH_BSMODE_INBAND_PPS:
+		e |= gf_dynstrcat(&args, "bs_switch=pps", ":");
+		break;
 	case GF_DASH_BSMODE_MERGED:
 		e |= gf_dynstrcat(&args, "bs_switch=on", ":");
 		break;
@@ -581,7 +616,7 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 		e |= gf_dynstrcat(&args, "bs_switch=force", ":");
 		break;
 	}
-	//avcp, hvcp, aacp not mapped
+
 	if (dasher->seg_rad_name) {
 		sprintf(szArg, "template=%s", dasher->seg_rad_name);
 		e |= gf_dynstrcat(&args, szArg, ":");
@@ -623,6 +658,9 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 	case GF_DASH_PROFILE_AVC264_ONDEMAND:
 		e |= gf_dynstrcat(&args, "profile=dashavc264.onDemand", ":");
 		break;
+	case GF_DASH_PROFILE_DASHIF_LL:
+		e |= gf_dynstrcat(&args, "profile=dashif.ll", ":");
+		break;
 	}
 	if (dasher->cp_location_mode==GF_DASH_CPMODE_REPRESENTATION) e |= gf_dynstrcat(&args, "cp=rep", ":");
 	else if (dasher->cp_location_mode==GF_DASH_CPMODE_BOTH) e |= gf_dynstrcat(&args, "cp=both", ":");
@@ -661,7 +699,8 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 		}
 	}
 	if (dasher->sub_duration) {
-		sprintf(szArg, "subdur=%g", dasher->sub_duration);
+		//subdur is in seconds in dasher filter
+		sprintf(szArg, "subdur=%g", dasher->sub_duration/dasher->dash_scale);
 		e |= gf_dynstrcat(&args, szArg, ":");
 	}
 	if (dasher->dash_state) {
@@ -686,7 +725,11 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 		diff -= dasher->segment_duration;
 		if (diff<0) diff = -diff;
 		if (diff > 0.01) {
-			sprintf(szArg, "cdur=%g", dasher->fragment_duration);
+			if (dasher->fragment_duration == (u32) dasher->fragment_duration) {
+				sprintf(szArg, "cdur=%u/%u", (u32) dasher->fragment_duration, dasher->dash_scale);
+			} else {
+				sprintf(szArg, "cdur=%g", dasher->fragment_duration/dasher->dash_scale);
+			}
 			e |= gf_dynstrcat(&args, szArg, ":");
 		}
 	}
@@ -723,6 +766,9 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 	case GF_DASH_PSSH_MPD:
 		e |= gf_dynstrcat(&args, "pssh=m", ":");
 		break;
+	case GF_DASH_PSSH_NONE:
+		e |= gf_dynstrcat(&args, "pssh=n", ":");
+		break;
 	}
 
 
@@ -733,10 +779,6 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 	}
 
 	if (dasher->fragments_start_with_rap) e |= gf_dynstrcat(&args, "sfrag", ":");
-	if (dasher->tmpdir) {
-		sprintf(szArg, "tmpd=%s", dasher->tmpdir );
-		e |= gf_dynstrcat(&args, szArg, ":");
-	}
 
 	if (dasher->cues_file) {
 		sprintf(szArg, "cues=%s", dasher->cues_file );
@@ -752,6 +794,12 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 		e |= gf_dynstrcat(&args, "sbound=closest", ":");
 	else if (dasher->split_mode==GF_DASH_SPLIT_IN)
 		e |= gf_dynstrcat(&args, "sbound=in", ":");
+
+	if (dasher->merge_last_seg)
+		e |= gf_dynstrcat(&args, "last_seg_merge", ":");
+
+	if (dasher->keep_utc)
+		e |= gf_dynstrcat(&args, "keep_utc", ":");
 
 	//finally append profiles/info/etc with double separators as these may contain ':'
 	if (dasher->dash_profile_extension) {
@@ -799,8 +847,8 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 
 	if (args) gf_free(args);
 
-	if (sep_ext) {
-		sep_ext[0] = ':';
+	if (o_sep_ext) {
+		o_sep_ext[0] = ':';
 	}
 
 	if (!dasher->output) {
@@ -813,7 +861,7 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 
 	for (i=0; i<count; i++) {
 		GF_DashSegmenterInput *di = gf_list_get(dasher->inputs, i);
-		if (di->periodID || di->period_duration || di->xlink) {
+		if (di->periodID || (di->period_duration.num && di->period_duration.den) || di->xlink) {
 			multi_period = GF_TRUE;
 		}
 		di->period_order=0;
@@ -842,27 +890,34 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 			cur_period_order++;
 		}
 	}
+	for (i=0; i<count; i++) {
+		GF_DashSegmenterInput *di = gf_list_get(dasher->inputs, i);
+		if (di->filter_chain) {
+			use_filter_chains = GF_TRUE;
+			break;
+		}
+	}
 
 	for (i=0; i<count; i++) {
 		u32 j;
 		GF_Filter *src = NULL;
 		GF_Filter *rt = NULL;
-		const char *url = "null";
+		const char *url = NULL;
 		char *frag=NULL;
 		GF_DashSegmenterInput *di = gf_list_get(dasher->inputs, i);
 
 		if (dasher->real_time) {
 			rt = gf_fs_load_filter(dasher->fsess, "reframer:rt=sync", NULL);
 		}
-		if (di->file_name && strlen(di->file_name)) url = di->file_name;
-		if (!stricmp(url, "null")) url = NULL;
+		if (di->file_name && strlen(di->file_name) && stricmp(di->file_name, "null") )
+			url = di->file_name;
+
 		if (url) {
 			frag = strrchr(di->file_name, '#');
 			if (frag) frag[0] = 0;
 		}
 
 		args = NULL;
-
 		//if source is isobmf using extractors, we want to keep the extractors
 		e = gf_dynstrcat(&args, "smode=splitx", ":");
 
@@ -883,7 +938,7 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 		}
 
 		//set all args
-		if (di->representationID && strcmp(di->representationID, "NULL")) {
+		if (!use_filter_chains && di->representationID && strcmp(di->representationID, "NULL")) {
 			sprintf(szArg, "#Representation=%s", di->representationID );
 			e |= gf_dynstrcat(&args, szArg, ":");
 		}
@@ -900,22 +955,24 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 			sprintf(szArg, "#PStart=-%d", di->period_order);
 			e |= gf_dynstrcat(&args, szArg, ":");
 		}
-		if (di->period_duration) {
-			if (!url) {
-				sprintf(szArg, "#PDur=%g", di->period_duration );
-				e |= gf_dynstrcat(&args, szArg, ":");
-			} else {
-				sprintf(szArg, "#DashDur=%g", di->period_duration );
-				e |= gf_dynstrcat(&args, szArg, ":");
-			}
-		}
 
-		if (di->dash_duration) {
-			sprintf(szArg, "#DashDur=%g", di->period_duration );
+		if (di->period_duration.num && di->period_duration.den) {
+			if (di->period_duration.den==1)
+				sprintf(szArg, "#PDur=%d", di->period_duration.num );
+			else
+				sprintf(szArg, "#PDur=%d/%u", di->period_duration.num, di->period_duration.den );
 			e |= gf_dynstrcat(&args, szArg, ":");
 		}
-		if (url && di->media_duration) {
-			sprintf(szArg, "#CDur=%g", di->media_duration );
+
+		if (di->dash_duration.num && di->dash_duration.den) {
+			if (di->dash_duration.den==1)
+				sprintf(szArg, "#DashDur=%d", di->dash_duration.num );
+			else
+				sprintf(szArg, "#DashDur=%d/%u", di->dash_duration.num, di->dash_duration.den);
+			e |= gf_dynstrcat(&args, szArg, ":");
+		}
+		if (url && di->media_duration.num && di->media_duration.den) {
+			sprintf(szArg, "#ClampDur="LLU"/"LLD"", di->media_duration.num, di->media_duration.den );
 			e |= gf_dynstrcat(&args, szArg, ":");
 		}
 
@@ -998,7 +1055,6 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 
 		if (di->sscale) e |= gf_dynstrcat(&args, "#SingleScale=true", ":");
 
-
 		if (e) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[DASH] Failed to setup source arguments for %s\n", di->file_name));
 			if (frag) frag[0] = '#';
@@ -1022,17 +1078,35 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 			src = rt;
 		}
 
-		if (!di->filter_chain) continue;
-
+		if (!di->filter_chain) {
+			//assign this source 
+			gf_filter_set_source(dasher->output, src, NULL);
+			continue;
+		}
 		//create the filter chain between source (or rt if it was set) and dasher
 
 		//filter chain
 		GF_Filter *prev_filter=src;
 		char *fargs = (char *) di->filter_chain;
+		char *sep1 = strstr(fargs, "@@");
+		char *sep2 = strstr(fargs, "@");
+		Bool old_syntax = GF_FALSE;
+		if (sep1 && sep2 && (sep1==sep2))
+			old_syntax = GF_TRUE;
+
 		while (fargs) {
 			GF_Filter *f;
-			char *sep = strstr(fargs, "@@");
+			char *sep;
+			Bool end_of_sub_chain = GF_FALSE;
+			if (old_syntax) {
+				sep = strstr(fargs, "@@");
+			} else {
+				sep = strstr(fargs, "@");
+				if (sep && (sep[1] == '@'))
+					end_of_sub_chain = GF_TRUE;
+			}
 			if (sep) sep[0] = 0;
+
 			f = gf_fs_load_filter(dasher->fsess, fargs, &e);
 			if (!f) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[DASH] Failed to load filter %s: %s\n", fargs, gf_error_to_string(e) ));
@@ -1044,7 +1118,15 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 			prev_filter = f;
 			if (!sep) break;
 			sep[0] = '@';
-			fargs = sep+2;
+			if (old_syntax || end_of_sub_chain) {
+				fargs = sep+2;
+				if (end_of_sub_chain && prev_filter) {
+					gf_filter_set_source(dasher->output, prev_filter, NULL);
+					prev_filter = src;
+				}
+			} else {
+				fargs = sep+1;
+			}
 		}
 		if (prev_filter) {
 			gf_filter_set_source(dasher->output, prev_filter, NULL);
@@ -1056,6 +1138,7 @@ static GF_Err gf_dasher_setup(GF_DASHSegmenter *dasher)
 
 GF_Err dash_state_check_timing(const char *dash_state, u64 *next_gen_ntp_ms, u32 *next_time_ms)
 {
+#ifndef GPAC_DISABLE_CORE_TOOLS
 	u64 next_gen_ntp = 0;
 	GF_Err e = GF_OK;
 	GF_DOMParser *mpd_parser;
@@ -1093,6 +1176,9 @@ GF_Err dash_state_check_timing(const char *dash_state, u64 *next_gen_ntp_ms, u32
 		}
 	}
 	return GF_OK;
+#else
+	return GF_NOT_SUPPORTED;
+#endif /*GPAC_DISABLE_CORE_TOOLS*/
 }
 
 GF_EXPORT
@@ -1135,6 +1221,7 @@ GF_Err gf_dasher_process(GF_DASHSegmenter *dasher)
 	e = gf_fs_run(dasher->fsess);
 	if (e>0) e = GF_OK;
 
+	gf_fs_print_non_connected(dasher->fsess);
 	if (dasher->print_stats_graph & 1) gf_fs_print_stats(dasher->fsess);
 	if (dasher->print_stats_graph & 2) gf_fs_print_connections(dasher->fsess);
 
@@ -1146,6 +1233,7 @@ GF_Err gf_dasher_process(GF_DASHSegmenter *dasher)
 	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\n"));
 
 	if (dasher->no_cache) {
+		if (!e) gf_fs_print_unused_args(dasher->fsess, "smode");
 		gf_fs_del(dasher->fsess);
 		dasher->fsess = NULL;
 	}

@@ -121,10 +121,10 @@ typedef struct
 The color type used in the GPAC framework represents colors in the form 0xAARRGGBB, with each component ranging from 0 to 255
 */
 typedef u32 GF_Color;
-/*!\hideinitializer color formating macro from alpha, red, green and blue components expressed as integers ranging from 0 to 255*/
+/*!\hideinitializer color formatting macro from alpha, red, green and blue components expressed as integers ranging from 0 to 255*/
 #define GF_COL_ARGB(a, r, g, b) (((u32) a)<<24 | ((u32) r)<<16 | ((u32) g)<<8 | ((u32) b))
 
-/*!\hideinitializer color formating macro from alpha, red, green and blue components expressed as fixed numbers ranging from 0 to \ref FIX_ONE*/
+/*!\hideinitializer color formatting macro from alpha, red, green and blue components expressed as fixed numbers ranging from 0 to \ref FIX_ONE*/
 #define GF_COL_ARGB_FIXED(_a, _r, _g, _b) GF_COL_ARGB(FIX2INT(255*(_a)), FIX2INT(255*(_r)), FIX2INT(255*(_g)), FIX2INT(255*(_b)))
 /*!\hideinitializer gets alpha component of a color*/
 #define GF_COL_A(c) (u8) ((c)>>24)
@@ -134,9 +134,9 @@ typedef u32 GF_Color;
 #define GF_COL_G(c) (u8) ( ((c)>>8) & 0xFF)
 /*!\hideinitializer gets blue component of a color*/
 #define GF_COL_B(c) (u8) ( (c) & 0xFF)
-/*!\hideinitializer 16-bits color formating macro from red, green and blue components*/
+/*!\hideinitializer 16-bits color formatting macro from red, green and blue components*/
 #define GF_COL_565(r, g, b) (u16) (((r & 248)<<8) + ((g & 252)<<3)  + (b>>3))
-/*!\hideinitializer 15-bits color formating macro from red, green and blue components*/
+/*!\hideinitializer 15-bits color formatting macro from red, green and blue components*/
 #define GF_COL_555(r, g, b) (u16) (((r & 248)<<7) + ((g & 248)<<2)  + (b>>3))
 
 /*!\hideinitializer gets alpha component of a wide color*/
@@ -220,6 +220,17 @@ Transforms a color with a given color matrix
 \return transformed color
 */
 GF_Color gf_cmx_apply(GF_ColorMatrix *_this, GF_Color col);
+
+/*!\brief color matrix transform
+
+Transforms a color with a given color matrix
+\param _this color matrix to use.
+\param a alpha to transform (in/out)
+\param r red to transform (in/out)
+\param g green to transform (in/out)
+\param b blue to transform (in/out)
+*/
+void gf_cmx_apply_argb(GF_ColorMatrix *_this, u8 *a, u8 *r, u8 *g, u8 *b);
 
 /*!\brief color matrix transform on wide pixel (16 bit per component)
 
