@@ -2569,6 +2569,9 @@ sample_entry_setup:
 		}
 	} else if (m_subtype == GF_ISOM_SUBTYPE_METT) {
 		comp_name = "Text Metadata";
+		
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("GF_ISOM_SUBTYPE_METT %s\n", meta_mime ));
+
 		e = gf_isom_new_stxt_description(ctx->file, tkw->track_num, GF_ISOM_SUBTYPE_METT, meta_mime, meta_encoding, meta_config, &tkw->stsd_idx);
 		if (e) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MP4Mux] Error creating new METT sample description: %s\n", gf_error_to_string(e) ));
@@ -2576,6 +2579,9 @@ sample_entry_setup:
 		}
 	} else if (m_subtype == GF_ISOM_SUBTYPE_AMF0) {
 		comp_name = "Action Message Metadata";
+
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("GF_ISOM_SUBTYPE_AMF0 %s\n", meta_mime ));
+
 		e = gf_isom_new_stxt_description(ctx->file, tkw->track_num, GF_ISOM_SUBTYPE_AMF0, meta_mime, meta_encoding, meta_config, &tkw->stsd_idx);
 		if (e) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MP4Mux] Error creating new AMF0 sample description: %s\n", gf_error_to_string(e) ));
@@ -2583,6 +2589,9 @@ sample_entry_setup:
 		}
 	} else if (m_subtype == GF_ISOM_SUBTYPE_AMF3) {
 		comp_name = "Action Message Metadata";
+		
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("GF_ISOM_SUBTYPE_AMF3 %s\n", meta_mime ));
+
 		e = gf_isom_new_stxt_description(ctx->file, tkw->track_num, GF_ISOM_SUBTYPE_AMF3, meta_mime, meta_encoding, meta_config, &tkw->stsd_idx);
 		if (e) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MP4Mux] Error creating new AMF3 sample description: %s\n", gf_error_to_string(e) ));
@@ -2613,6 +2622,9 @@ sample_entry_setup:
 
 	} else if ((m_subtype == GF_ISOM_SUBTYPE_SBTT) || (m_subtype == GF_ISOM_SUBTYPE_STXT) ) {
 		comp_name = (m_subtype == GF_ISOM_SUBTYPE_STXT) ? "Simple Timed Text" : "Textual Subtitle";
+
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("GF_ISOM_SUBTYPE_STXT %s\n", meta_mime ));
+
 		e = gf_isom_new_stxt_description(ctx->file, tkw->track_num, m_subtype, meta_mime, meta_content_encoding, meta_config, &tkw->stsd_idx);
 		if (e) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MP4Mux] Error creating new %s sample description: %s\n", gf_4cc_to_str(m_subtype), gf_error_to_string(e) ));
