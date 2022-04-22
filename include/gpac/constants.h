@@ -502,6 +502,7 @@ typedef enum
 	/*! codecid for meta data streams in text format*/
 	GF_CODECID_META_TEXT = GF_4CC('m','e','t','t'),
 	GF_CODECID_META_TEXT_AMF = GF_4CC('a','m','f','0'),
+	GF_CODECID_META_TEXT_AMF3 = GF_4CC('a','m','f','3'),
 	/*! codecid for meta data streams in XML format*/
 	GF_CODECID_META_XML = GF_4CC('m','e','t','x'),
 	/*! codecid for subtitle streams in text format*/

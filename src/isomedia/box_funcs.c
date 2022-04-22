@@ -1109,6 +1109,7 @@ static struct box_registry_entry {
 	BOX_DEFINE_CHILD( GF_ISOM_BOX_TYPE_METX, metx, "stsd"),
 	BOX_DEFINE_CHILD( GF_ISOM_BOX_TYPE_METT, metx, "stsd"),
 	BOX_DEFINE_CHILD( GF_ISOM_BOX_TYPE_AMF0, metx, "stsd"),
+	BOX_DEFINE_CHILD( GF_ISOM_BOX_TYPE_AMF3, metx, "stsd"),
 	FBOX_DEFINE( GF_ISOM_BOX_TYPE_STVI, stvi, "schi", 0),
 
 

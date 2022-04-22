@@ -2995,17 +2995,9 @@ props_done:
 			break;
 		case GF_CODECID_SUBS_TEXT:
 		case GF_CODECID_META_TEXT:
-<<<<<<< HEAD
 		case GF_CODECID_META_TEXT_AMF:
-			gf_fprintf(dump, "<![CDATA[");
-			for (i=0; i<size; i++) {
-				gf_fputc(data[i], dump);
-			}
-			gf_fprintf(dump, "]]>\n");
-			break;
-=======
+		case GF_CODECID_META_TEXT_AMF3:
 			dflag=1;
->>>>>>> a4015fa4fc99fd3e7a62be0fe6bd565e1dded030
 		case GF_CODECID_SUBS_XML:
 		case GF_CODECID_META_XML:
 			if (dflag)

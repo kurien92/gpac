@@ -1241,6 +1241,7 @@ GF_Err gf_isom_stxt_get_description(GF_ISOFile *the_file, u32 trackNumber, u32 S
 	        ((entry->type!=GF_ISOM_BOX_TYPE_STXT) &&
 	         (entry->type!=GF_ISOM_BOX_TYPE_METT) &&
 	         (entry->type!=GF_ISOM_BOX_TYPE_AMF0) &&
+			 (entry->type!=GF_ISOM_BOX_TYPE_AMF3) &&
 	         (entry->type!=GF_ISOM_BOX_TYPE_SBTT))) {
 		return GF_BAD_PARAM;
 	}
@@ -1290,6 +1291,7 @@ GF_Err gf_isom_new_stxt_description(GF_ISOFile *movie, u32 trackNumber, u32 type
 	case GF_ISOM_SUBTYPE_STXT:
 	case GF_ISOM_SUBTYPE_METT:
 	case GF_ISOM_SUBTYPE_AMF0:
+	case GF_ISOM_SUBTYPE_AMF3:
 		break;
 	default:
 		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("SampleEntry shall be either Metadata, Subtitle or SimpleText. Abort.\n"));

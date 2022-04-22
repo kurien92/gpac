@@ -186,6 +186,7 @@ static void isor_declare_track(ISOMReader *read, ISOMChannel *ch, u32 track, u32
 		case GF_ISOM_SUBTYPE_STXT:
 		case GF_ISOM_SUBTYPE_METT:
 		case GF_ISOM_SUBTYPE_AMF0:
+		case GF_ISOM_SUBTYPE_AMF3:
 		case GF_ISOM_SUBTYPE_SBTT:
 		case GF_ISOM_MEDIA_SUBT:
 

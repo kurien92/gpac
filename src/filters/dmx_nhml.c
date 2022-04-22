@@ -932,6 +932,9 @@ static GF_Err nhmldmx_config_output(GF_Filter *filter, GF_NHMLDmxCtx *ctx, GF_XM
 		}  else if (codec_tag == GF_ISOM_SUBTYPE_AMF0) {
 			if (mime_type) gf_filter_pid_set_property_str(ctx->opid, "meta:mime", &PROP_STRING(mime_type) );
 			if (textEncoding) gf_filter_pid_set_property_str(ctx->opid, "meta:encoding", &PROP_STRING(textEncoding) );
+		} else if (codec_tag == GF_ISOM_SUBTYPE_AMF3) {
+			if (mime_type) gf_filter_pid_set_property_str(ctx->opid, "meta:mime", &PROP_STRING(mime_type) );
+			if (textEncoding) gf_filter_pid_set_property_str(ctx->opid, "meta:encoding", &PROP_STRING(textEncoding) );
 		} else {
 			e = GF_NOT_SUPPORTED;
 		}
